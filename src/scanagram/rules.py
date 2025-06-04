@@ -602,3 +602,44 @@ def dot_general_scanify_rule(
             )
     return 0, body_fn, [(0, out_axis, stride)], []
 register_scanify_rule(lax.dot_general_p, dot_general_scanify_rule)
+
+def reshape_scanify_rule(
+    inscanvars, operand, *dyn_shape, new_sizes, dimensions, sharding
+):
+    if dyn_shape:
+        raise ScanConversionError(
+            "Dyanamic shapes in reshape are not currently supported in "
+            "scan conversion."
+        )
+    [(argnum, axis, stride)] = inscanvars
+    if sharding is not None:
+        raise ScanConversionError(
+            "Sharding is currently not supported in scan conversion of reshape."
+        )
+    if dimensions is None:
+        dimensions = tuple(range(operand.ndim))
+    pre_size = np.prod(
+        np.take(operand.shape, dimensions)[:dimensions.index(axis)]
+    )
+    size = 1
+    a = -1
+    while size <= pre_size:
+        a = a + 1
+        size = size * new_sizes[a]
+    if operand.shape[axis] != new_sizes[a]:
+        raise ScanConversionError("Reshape must preserve scanned axis.")
+    out_axis = a
+    new_sizes = list(new_sizes)
+    new_sizes.pop(a)
+    new_sizes = tuple(new_sizes)
+    dimensions = list(dimensions)
+    dimensions.remove(axis)
+    dimensions = [d - 1 if d > axis else d for d in dimensions]
+    dimensions = tuple(dimensions)
+    def body_fn(carry, x):
+        assert carry is None
+        return None, lax.reshape_p.bind(
+            x, new_sizes=new_sizes, dimensions=dimensions, sharding=sharding
+        )
+    return None, body_fn, [(0, a, stride)], []
+register_scanify_rule(lax.reshape_p, reshape_scanify_rule)

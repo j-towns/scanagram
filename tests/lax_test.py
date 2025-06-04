@@ -595,3 +595,32 @@ def test_dot_general_rhs_non_batch():
             jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
         )
     test_util.check_scan(f, y)
+
+def test_reshape_pre():
+    rng = np.random.RandomState(0)
+    x = rng.randn(3, 6, 4)
+    def f(x):
+        x = jnp.moveaxis(x, 0, 1)
+        return jnp.moveaxis(lax.reshape(x, (3, 2, 3, 4)), 2, 0)
+    test_util.check_scan(f, x)
+
+def test_reshape_post():
+    rng = np.random.RandomState(0)
+    x = rng.randn(3, 6, 4)
+    def f(x):
+        return lax.reshape(x, (3, 2, 3, 4))
+    test_util.check_scan(f, x)
+
+def test_reshape_dimensions():
+    rng = np.random.RandomState(0)
+    x = rng.randn(3, 6, 4)
+    def f(x):
+        return jnp.moveaxis(lax.reshape(x, (2, 3, 4, 3), (1, 2, 0)), 3, 0)
+    test_util.check_scan(f, x)
+
+def test_reshape_dimensions():
+    rng = np.random.RandomState(0)
+    x = rng.randn(3, 6, 4)
+    def f(x):
+        return jnp.moveaxis(lax.reshape(x, (2, 3, 4, 3), (1, 2, 0)), 3, 0)
+    test_util.check_scan(f, x)
