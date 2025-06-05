@@ -4,7 +4,7 @@ from typing import Any
 from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
-from jax.core import Atom
+from jax.core import Atom, AbstractValue
 
 from scanagram.util import safe_map
 
@@ -54,24 +54,6 @@ def clean_up_dead_vars(eqn: JaxprEqn, env: dict[Var, Any],
             # equations.
             del env[v]
 ###############################################################################
-
-# Need this wrapper type because the JAX AbstractValue type is not publicly
-# exported
-class Abstract:
-    def __init__(self, aval):
-        self.aval = aval
-
-    @property
-    def shape(self):
-        return self.aval.shape
-
-    @property
-    def dtype(self):
-        return self.aval.dtype
-
-    @property
-    def ndim(self):
-        return self.aval.ndim
 
 class Deleted:
     pass
@@ -154,7 +136,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
             else:
                 return env[v]
         else:
-            return Abstract(v.aval)
+            return v.aval
     map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
@@ -178,7 +160,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
             scanvars.update((e.outvars[i], (a, d)) for i, a, d in outscanvars)
             carry_init.append(init)
             eqn_body_fns.append(eqn_body_fn)
-        elif not any(isinstance(v, Abstract) for v in in_vals):
+        elif not any(isinstance(v, AbstractValue) for v in in_vals):
             subfuns, bind_params = e.primitive.get_bind_params(e.params)
             ans = e.primitive.bind(*subfuns, *in_vals, **bind_params)
             if e.primitive.multiple_results:
