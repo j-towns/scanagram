@@ -643,3 +643,17 @@ def reshape_scanify_rule(
         )
     return None, body_fn, [(0, a, stride)], []
 register_scanify_rule(lax.reshape_p, reshape_scanify_rule)
+
+def split_scanify_rule(inscanvars, operand, sizes, axis):
+    [(_, scan_axis, stride)] = inscanvars
+    if scan_axis == axis:
+        raise ScanConversionError(
+            "Applying split along scanned axis is not supported."
+        )
+    axis_ = axis if axis < scan_axis else axis - 1
+    def body_fn(carry, x):
+        assert carry is None
+        return None, lax.split(x, sizes, axis_)
+    outscanvars = [(n, scan_axis, stride) for n in range(len(sizes))]
+    return None, body_fn, outscanvars, []
+register_scanify_rule(lax.split_p, split_scanify_rule)

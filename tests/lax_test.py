@@ -643,3 +643,11 @@ def test_pjit_second_arg_scanned():
     xs = rng.randn(2, 3, 4)
     ys = rng.randn(2, 3, 4)
     test_util.check_scan(f, xs)
+
+def test_split():
+    rng = np.random.RandomState(0)
+
+    def f(xs):
+        return lax.split(xs, (2, 4), 1)
+    xs = rng.randn(2, 6)
+    test_util.check_scan(f, xs)
