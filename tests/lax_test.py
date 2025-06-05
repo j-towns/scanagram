@@ -4,6 +4,7 @@ import itertools
 
 from jax import lax
 from jax import dtypes
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as np_testing
@@ -624,3 +625,21 @@ def test_reshape_dimensions():
     def f(x):
         return jnp.moveaxis(lax.reshape(x, (2, 3, 4, 3), (1, 2, 0)), 3, 0)
     test_util.check_scan(f, x)
+
+def test_pjit():
+    rng = np.random.RandomState(0)
+
+    @jax.jit
+    def f(xs):
+        return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
+    xs = rng.randn(2, 3, 4)
+    test_util.check_scan(f, xs)
+
+def test_pjit_second_arg_scanned():
+    rng = np.random.RandomState(0)
+
+    def f(xs):
+        return jax.jit(jnp.add)(xs, ys)
+    xs = rng.randn(2, 3, 4)
+    ys = rng.randn(2, 3, 4)
+    test_util.check_scan(f, xs)

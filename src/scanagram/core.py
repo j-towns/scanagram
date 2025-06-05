@@ -5,6 +5,7 @@ from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
 from jax.core import Atom, AbstractValue
+from jax._src.pjit import pjit_p
 
 from scanagram.util import safe_map
 
@@ -115,7 +116,8 @@ def check_outvars(outvars, scanvars):
         )
 
 
-def make_carry_init(closed_jaxpr: ClosedJaxpr):
+def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
+    top_level = inscanvars is None
     jaxpr = closed_jaxpr.jaxpr
     carry_init = []
     eqn_body_fns = []
@@ -140,7 +142,8 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
     map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
-    scanvars = dict(zip(jaxpr.invars, len(jaxpr.invars) * [(0, 1)]))
+    inscanvars = inscanvars or [(n, 0, 1) for n in range(len(jaxpr.invars))]
+    scanvars = {jaxpr.invars[n]: (a, s) for n, a, s in inscanvars}
     for e in jaxpr.eqns:
         subfuns, bind_params = e.primitive.get_bind_params(e.params)
         inscanvars = [
@@ -168,8 +171,14 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr):
             else:
                 write(e.outvars[0], ans)
 
-    check_outvars(jaxpr.outvars, scanvars)
-    return eqn_body_fns, set(scanvars), carry_init
+    if top_level:
+        check_outvars(jaxpr.outvars, scanvars)
+        return eqn_body_fns, set(scanvars), carry_init
+    else:
+        outscanvars = tuple(
+            (i,) + scanvars[v] for i, v in enumerate(jaxpr.outvars)
+        )
+        return eqn_body_fns, set(scanvars), carry_init, outscanvars
 
 def make_scan(closed_jaxpr: ClosedJaxpr):
     eqn_body_fns, scanvars, carry_init = make_carry_init(closed_jaxpr)
@@ -177,3 +186,17 @@ def make_scan(closed_jaxpr: ClosedJaxpr):
 
 class ScanConversionError(Exception):
     pass
+
+def pjit_scanify_rule(
+    inscanvars, *args, jaxpr, in_shardings, out_shardings, in_layouts,
+    out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
+    compiler_options_kvs,
+):
+    # TODO: Figure out how to handle (non-default cases of) all the params
+    body_fns, scanvars, carry_init, outscanvars = make_carry_init(
+        jaxpr, inscanvars
+    )
+    def body_fn_(carry, *args):
+        return body_fn(jaxpr, body_fns, scanvars, carry, args)
+    return carry_init, body_fn_, outscanvars, []
+register_scanify_rule(pjit_p, pjit_scanify_rule)
