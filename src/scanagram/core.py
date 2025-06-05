@@ -4,6 +4,7 @@ from typing import Any
 from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
+from jax.extend.core.primitives import custom_vjp_call_p
 from jax.core import Atom, AbstractValue
 from jax._src.pjit import pjit_p
 
@@ -145,7 +146,6 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
     inscanvars = inscanvars or [(n, 0, 1) for n in range(len(jaxpr.invars))]
     scanvars = {jaxpr.invars[n]: (a, s) for n, a, s in inscanvars}
     for e in jaxpr.eqns:
-        subfuns, bind_params = e.primitive.get_bind_params(e.params)
         inscanvars = [
             (i, *scanvars[v]) for i, v in enumerate(e.invars)
             if type(v) is Var and v in scanvars
@@ -154,9 +154,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
         if inscanvars:
             # TODO: Raise NotImplementedError if rule isn't defined
             init, eqn_body_fn, outscanvars, to_delete = (
-                scanify_rules[e.primitive](
-                    inscanvars, *subfuns, *in_vals, **bind_params
-                )
+                scanify_rules[e.primitive](inscanvars, *in_vals, **e.params)
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
@@ -187,16 +185,28 @@ def make_scan(closed_jaxpr: ClosedJaxpr):
 class ScanConversionError(Exception):
     pass
 
-def pjit_scanify_rule(
-    inscanvars, *args, jaxpr, in_shardings, out_shardings, in_layouts,
-    out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
-    compiler_options_kvs,
-):
-    # TODO: Figure out how to handle (non-default cases of) all the params
+def call_scanify_rule(inscanvars, jaxpr, *args):
     body_fns, scanvars, carry_init, outscanvars = make_carry_init(
         jaxpr, inscanvars
     )
     def body_fn_(carry, *args):
         return body_fn(jaxpr, body_fns, scanvars, carry, args)
     return carry_init, body_fn_, outscanvars, []
+
+def pjit_scanify_rule(
+    inscanvars, *args, jaxpr, in_shardings, out_shardings, in_layouts,
+    out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
+    compiler_options_kvs,
+):
+    # TODO: Figure out how to handle (non-default cases of) all the params
+    return call_scanify_rule(inscanvars, jaxpr, *args)
 register_scanify_rule(pjit_p, pjit_scanify_rule)
+
+def custom_vjp_call_scanify_rule(
+    inscanvars, *args, call_jaxpr, fwd_jaxpr_thunk, num_consts, bwd, out_trees,
+    symbolic_zeros
+):
+    # TODO: Maybe warn the user of undefined behavour if you take the gradient
+    # of this?
+    return call_scanify_rule(inscanvars, call_jaxpr, *args)
+register_scanify_rule(custom_vjp_call_p, custom_vjp_call_scanify_rule)

@@ -651,3 +651,18 @@ def test_split():
         return lax.split(xs, (2, 4), 1)
     xs = rng.randn(2, 6)
     test_util.check_scan(f, xs)
+
+def test_custom_vjp():
+    rng = np.random.RandomState(0)
+
+    @jax.custom_vjp
+    def f(xs):
+        return 2 * xs
+
+    f.defvjp(
+        lambda xs: (2 * xs, None),
+        lambda res, g: (2 * g,),
+    )
+
+    xs = rng.randn(2, 6)
+    test_util.check_scan(f, xs)
