@@ -240,7 +240,7 @@ register_scanify_rule(lax.scan_p, scan_scanify_rule)
 
 def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
                                   broadcast_dimensions, sharding):
-    [(_, inscan_axis, _)] = inscanvars
+    [(_, inscan_axis, stride)] = inscanvars
     if sharding is not None:
         raise ScanConversionError(
             "Sharding in broadcast_in_dim not yet supported."
@@ -253,10 +253,14 @@ def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
     shape = list(shape)
     shape[broadcast_dimensions[inscan_axis]] = 1
     shape = tuple(shape)
-    return batch_scanify_rule(
-        lax.broadcast_in_dim_p, inscanvars, operand, shape=shape,
-        broadcast_dimensions=broadcast_dimensions, sharding=sharding
-    )
+    out_axis = broadcast_dimensions[inscan_axis]
+    def body_fn(carry, x):
+        assert carry is None
+        return None, jnp.squeeze(lax.broadcast_in_dim_p.bind(
+                jnp.expand_dims(x, inscan_axis), shape=shape,
+                broadcast_dimensions=broadcast_dimensions, sharding=sharding
+            ), out_axis)
+    return None, body_fn, [(0, out_axis, stride)], []
 register_scanify_rule(lax.broadcast_in_dim_p, broadcast_in_dim_scanify_rule)
 
 def _perm_inverse(p):
