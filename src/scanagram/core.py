@@ -158,7 +158,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
-            scanvars.update((e.outvars[i], (a, d)) for i, a, d in outscanvars)
+            scanvars.update((e.outvars[i], (a, s)) for i, a, s in outscanvars)
             carry_init.append(init)
             eqn_body_fns.append(eqn_body_fn)
         elif not any(isinstance(v, AbstractValue) for v in in_vals):

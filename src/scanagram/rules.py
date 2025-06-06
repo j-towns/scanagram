@@ -205,34 +205,41 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
         # TODO: Make this error more specific
         raise ScanConversionError(
             "Global scan over some, but not all, of the inputs of a scan is "
-            "not suppoorted"
+            "not currently suppoorted."
         )
     if not all(a == 0 for a in scanvar_axes):
         # TODO: Make this error more specific
         raise ScanConversionError(
             "Mismatch between global scan axis and scan axis"
         )
-    if not all(s == 1 for s in scanvar_strides):
-        raise ScanConversionError(
-            "Scan with strided input not yet implemented"
-        )
+    if not all_equal(scanvar_strides):
+        raise ScanConversionError("Scan input strides must match.")
+    stride = scanvar_strides[0]
     consts, carry = (
         xs_avals[:num_consts],
-        xs_avals[num_consts:num_consts + num_carry],
+        (0, xs_avals[num_consts:num_consts + num_carry]),
     )
     def body_fun(carry, *args):
-        carry_and_x = jaxpr_as_fun(jaxpr)(*(
-            consts + carry + args[num_consts + num_carry:]
+        i, old_carry = carry
+        new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
+            consts + old_carry + args[num_consts + num_carry:]
         ))
-        return (
-            tuple(carry_and_x[:num_carry]),
-            carry_and_x
+        ans = lax.cond(
+            i % stride,
+            lambda: [jnp.zeros_like(c) for c in new_carry_and_x],
+            lambda: new_carry_and_x,
         )
+        carry = lax.cond(
+            i % stride,
+            lambda: old_carry,
+            lambda: tuple(new_carry_and_x[:num_carry]),
+        )
+        return (i + 1, carry), ans
 
     out_scanvars = zip(
         range(num_carry, len(jaxpr.out_avals)),
         repeat(0, len(jaxpr.out_avals) - num_carry),
-        repeat(1, len(jaxpr.out_avals) - num_carry),
+        repeat(stride, len(jaxpr.out_avals) - num_carry),
     )
     out_to_delete = list(range(num_carry))
     return carry, body_fun, out_scanvars, out_to_delete

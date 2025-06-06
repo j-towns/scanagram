@@ -346,6 +346,18 @@ def test_scan():
     xs = rng.randn(5, 2)
     test_util.check_scan(f, xs)
 
+def test_scan_strided():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2)
+    def f(xs):
+        ys = lax.slice_in_dim(xs, 0, 6, 2)
+        carry_out, zs = lax.scan(
+            lambda carry, x: (carry + x, carry + x), init_carry, ys
+        )
+        return lax.pad(zs, 0., [(0, 1, 1), (0, 0, 0)])
+    xs = rng.randn(6, 2)
+    test_util.check_scan(f, xs)
+
 def test_transpose():
     rng = np.random.RandomState(0)
     def f(xs):
