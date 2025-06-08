@@ -589,6 +589,17 @@ def test_concatenate():
         return lax.concatenate([x, y], 1)
     test_util.check_scan(f, x)
 
+def test_concatenate_strided():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4), rng.randn(3, 3)
+    def f(x):
+        return lax.pad(
+            lax.concatenate([lax.slice_in_dim(x, 0, 6, 2), y], 1),
+            0.,
+            ((0, 1, 1), (0, 0, 0)),
+        )
+    test_util.check_scan(f, x)
+
 def test_concatenate_both_scanned():
     rng = np.random.RandomState(0)
     x, y = rng.randn(6, 4), rng.randn(6, 3)
@@ -612,6 +623,15 @@ def test_dot_general_lhs_batch():
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
     test_util.check_scan(f, x)
 
+def test_dot_general_lhs_batch_strided():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(6, 4, 3), rng.randn(3, 3, 4)
+    def f(x):
+        x = lax.slice_in_dim(x, 0, 6, 2)
+        z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+        return lax.pad(z, 0., ((0, 1, 1), (0, 0, 0), (0, 0, 0)))
+    test_util.check_scan(f, x)
+
 def test_dot_general_lhs_non_batch():
     rng = np.random.RandomState(0)
     x, y = rng.randn(6, 3, 4), rng.randn(6, 3, 4)
@@ -626,6 +646,15 @@ def test_dot_general_rhs_batch():
     x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
     def f(y):
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+    test_util.check_scan(f, y)
+
+def test_dot_general_rhs_batch_strided():
+    rng = np.random.RandomState(0)
+    x, y = rng.randn(3, 4, 3), rng.randn(6, 3, 4)
+    def f(y):
+        y = lax.slice_in_dim(y, 0, 6, 2)
+        z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
+        return lax.pad(z, 0., ((0, 1, 1), (0, 0, 0), (0, 0, 0)))
     test_util.check_scan(f, y)
 
 def test_dot_general_rhs_non_batch():

@@ -478,14 +478,15 @@ def concatenate_scanify_rule(inscanvars, *operands, dimension):
         raise ScanConversionError(
             "Global scan along concatenation dimension is not supported"
         )
-    assert all_equal(instrides) # This should be guaranteed now
+    assert all_equal(instrides) # This should be guaranteed now, because the
+                                # shapes must match along axis
     instride = instrides[0]
     carry_init = 0
     def body_fn(i, *operands):
         operands = [
             jnp.expand_dims(
                 o if n in argnums else lax.dynamic_index_in_dim(
-                    o, i, axis, False
+                    o, i // instride, axis, False
                 ), axis
             )
             for n, o in enumerate(operands)
@@ -567,7 +568,7 @@ def dot_general_scanify_rule(
             if axis in lhs_batch_axes:
                 rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
                 rhs = lax.dynamic_index_in_dim(
-                    rhs, i, rhs_axis, keepdims=True
+                    rhs, i // stride, rhs_axis, keepdims=True
                 )
             ans = jnp.squeeze(lax.dot_general_p.bind(
                 jnp.expand_dims(lhs, axis), rhs,
@@ -598,7 +599,7 @@ def dot_general_scanify_rule(
             if axis in rhs_batch_axes:
                 lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
                 lhs = lax.dynamic_index_in_dim(
-                    lhs, i, lhs_axis, keepdims=True
+                    lhs, i // stride, lhs_axis, keepdims=True
                 )
             ans = jnp.squeeze(lax.dot_general_p.bind(
                 lhs, jnp.expand_dims(rhs, axis),
