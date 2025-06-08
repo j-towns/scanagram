@@ -154,15 +154,15 @@ def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
     def body_fn(counter, *args):
         args = [
             a if i in argnums else lax.dynamic_index_in_dim(
-                a, counter, axis, False
+                a, counter // stride, axis, False
             ) for i, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
         if stride > 1:
             ans = lax.cond(
                 counter % stride,
-                jnp.zeros_like(ans),
-                ans
+                lambda: jnp.zeros_like(ans),
+                lambda: ans,
             )
         return counter + 1, ans
     return init, body_fn, [(0, axis, stride)], []
@@ -201,7 +201,7 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
         raise ScanConversionError(
             "Global scan along an axis of a constant or carry in a call to "
             "scan. This is not currently supported, but could be in future.")
-    if not set(scanvar_argnums) == xs_argnums:
+    if set(scanvar_argnums) != xs_argnums:
         # TODO: Make this error more specific
         raise ScanConversionError(
             "Global scan over some, but not all, of the inputs of a scan is "
@@ -217,10 +217,10 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
     stride = scanvar_strides[0]
     consts, carry = (
         xs_avals[:num_consts],
-        (0, xs_avals[num_consts:num_consts + num_carry]),
+        xs_avals[num_consts:num_consts + num_carry],
     )
-    def body_fun(carry, *args):
-        i, old_carry = carry
+    def body_fun(i_and_carry, *args):
+        i, old_carry = i_and_carry
         new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
             consts + old_carry + args[num_consts + num_carry:]
         ))
@@ -242,7 +242,7 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
         repeat(stride, len(jaxpr.out_avals) - num_carry),
     )
     out_to_delete = list(range(num_carry))
-    return carry, body_fun, out_scanvars, out_to_delete
+    return (0, carry), body_fun, out_scanvars, out_to_delete
 register_scanify_rule(lax.scan_p, scan_scanify_rule)
 
 def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,

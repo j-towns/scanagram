@@ -321,6 +321,25 @@ def test_nary_other_axis():
         return jnp.moveaxis(lax.add(jnp.moveaxis(xs, 0, 1), y), 1, 0)
     test_util.check_scan(f, xs)
 
+def test_nary_strided():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3)
+    def f(xs):
+        ys = lax.slice_in_dim(xs, 0, 12, 2)
+        zs = 2 * ys
+        return lax.pad(zs, 0., ((0, 1, 1), (0, 0, 0)))
+    test_util.check_scan(f, xs)
+
+def test_nary_strided2():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3)
+    bs = rng.randn(6, 3)
+    def f(xs):
+        ys = lax.slice_in_dim(xs, 0, 12, 2)
+        zs = bs * ys
+        return lax.pad(zs, 0., ((0, 1, 1), (0, 0, 0)))
+    test_util.check_scan(f, xs)
+
 @pytest.mark.parametrize(
     'op,shape,axes,dtype',
     [(rec.op, shape, axes, dtype)
@@ -437,8 +456,8 @@ def test_conv_rhs_dilation():
     test_util.check_scan(f, lhs)
 
 def test_conv_in_stride():
-    window_size = 2
-    in_stride = 3
+    window_size = 3
+    in_stride = 2
     rng = np.random.RandomState(0)
     x = rng.randn(12, 4, 5)
     rhs = rng.randn(window_size, 5, 6)
@@ -469,7 +488,7 @@ def test_conv_window_stride():
     test_util.check_scan(f, x)
 
 def test_conv_in_stride_window_stride():
-    window_size = 2
+    window_size = 5
     in_stride = 2
     window_stride = 3
     rng = np.random.RandomState(0)
@@ -489,7 +508,7 @@ def test_conv_in_stride_window_stride():
     test_util.check_scan(f, x)
 
 def test_conv_lhs_dilation():
-    window_size = 2
+    window_size = 5
     lhs_dilation = 3
     rng = np.random.RandomState(0)
     lhs = rng.randn(12, 4, 5)
