@@ -13,10 +13,10 @@ from scanagram.util import safe_map
 
 map = safe_map
 
-scanify_rules = {}
+rules = {}
 
-def register_scanify_rule(p: Primitive, rule):
-    scanify_rules[p] = rule
+def register_rule(p: Primitive, rule):
+    rules[p] = rule
 
 ###############################################################################
 # This section is copied from jax._src.core
@@ -154,7 +154,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
         if inscanvars:
             # TODO: Raise NotImplementedError if rule isn't defined
             init, eqn_body_fn, outscanvars, to_delete = (
-                scanify_rules[e.primitive](inscanvars, *in_vals, **e.params)
+                rules[e.primitive](inscanvars, *in_vals, **e.params)
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
@@ -200,7 +200,7 @@ def pjit_scanify_rule(
 ):
     # TODO: Figure out how to handle (non-default cases of) all the params
     return call_scanify_rule(inscanvars, jaxpr, *args)
-register_scanify_rule(pjit_p, pjit_scanify_rule)
+register_rule(pjit_p, pjit_scanify_rule)
 
 def custom_vjp_call_scanify_rule(
     inscanvars, *args, call_jaxpr, fwd_jaxpr_thunk, num_consts, bwd, out_trees,
@@ -209,4 +209,4 @@ def custom_vjp_call_scanify_rule(
     # TODO: Maybe warn the user of undefined behavour if you take the gradient
     # of this?
     return call_scanify_rule(inscanvars, call_jaxpr, *args)
-register_scanify_rule(custom_vjp_call_p, custom_vjp_call_scanify_rule)
+register_rule(custom_vjp_call_p, custom_vjp_call_scanify_rule)

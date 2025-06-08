@@ -5,7 +5,7 @@ from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
 from scanagram.util import safe_map, unzip3, safe_zip
 
-from scanagram.core import register_scanify_rule, ScanConversionError
+from scanagram.core import register_rule, ScanConversionError
 
 map = safe_map
 zip = safe_zip
@@ -18,7 +18,7 @@ def all_equal(xs):
         x, *xs = xs
         return all(y == x for y in xs)
 
-def batch_scanify_rule(op, inscanvars, *in_avals, **bind_params):
+def batch_rule(op, inscanvars, *in_avals, **bind_params):
     # Used when scanning along a batch dimension of op
     assert not op.multiple_results
     _, scanvar_axes, strides = unzip3(inscanvars)
@@ -127,7 +127,7 @@ nary_ops = [
     lax.zeta_p,
 ]
 
-def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
+def nary_op_rule(op, inscanvars, *avals, **kwargs):
     argnums, axes, strides = unzip3(inscanvars)
     axis = axes[0]
     stride = strides[0]
@@ -149,7 +149,7 @@ def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
         )
     if all(a.ndim == 0 or a.shape[axis] == 1
            for i, a in enumerate(avals) if i not in argnums):
-        return batch_scanify_rule(op, inscanvars, *avals, **kwargs)
+        return batch_rule(op, inscanvars, *avals, **kwargs)
     init = 0
     def body_fn(counter, *args):
         args = [
@@ -168,7 +168,7 @@ def nary_op_scanify_rule(op, inscanvars, *avals, **kwargs):
     return init, body_fn, [(0, axis, stride)], []
 
 for op in nary_ops:
-    register_scanify_rule(op, partial(nary_op_scanify_rule, op))
+    register_rule(op, partial(nary_op_rule, op))
 
 reduce_ops = [
     lax.reduce_sum_p,
@@ -181,19 +181,19 @@ reduce_ops = [
     lax.argmax_p,
     lax.argmin_p,
 ]
-def reduce_scanify_rule(op, inscanvars, xs_aval, axes):
+def reduce_rule(op, inscanvars, xs_aval, axes):
     _, [inscan_axis], _ = unzip3(inscanvars)
     if inscan_axis in set(axes):
         raise ScanConversionError(
             "Global scan operating along reduce axis is not supported."
         )
-    return batch_scanify_rule(
+    return batch_rule(
         op, inscanvars, xs_aval, axes=axes
     )
 for op in reduce_ops:
-    register_scanify_rule(op, partial(reduce_scanify_rule, op))
+    register_rule(op, partial(reduce_rule, op))
 
-def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
+def scan_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
                       linear, num_carry, num_consts, reverse, unroll):
     scanvar_argnums, scanvar_axes, scanvar_strides = unzip3(inscanvars)
     xs_argnums = set(range(num_consts + num_carry, len(xs_avals)))
@@ -243,9 +243,9 @@ def scan_scanify_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
     )
     out_to_delete = list(range(num_carry))
     return (0, carry), body_fun, out_scanvars, out_to_delete
-register_scanify_rule(lax.scan_p, scan_scanify_rule)
+register_rule(lax.scan_p, scan_rule)
 
-def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
+def broadcast_in_dim_rule(inscanvars, operand, shape,
                                   broadcast_dimensions, sharding):
     [(_, inscan_axis, stride)] = inscanvars
     if sharding is not None:
@@ -268,7 +268,7 @@ def broadcast_in_dim_scanify_rule(inscanvars, operand, shape,
                 broadcast_dimensions=broadcast_dimensions, sharding=sharding
             ), out_axis)
     return None, body_fn, [(0, out_axis, stride)], []
-register_scanify_rule(lax.broadcast_in_dim_p, broadcast_in_dim_scanify_rule)
+register_rule(lax.broadcast_in_dim_p, broadcast_in_dim_rule)
 
 def _perm_inverse(p):
     p = np.asarray(p)
@@ -276,7 +276,7 @@ def _perm_inverse(p):
     s[p] = np.arange(len(p))
     return s
 
-def transpose_scanify_rule(inscanvars, operand, permutation):
+def transpose_rule(inscanvars, operand, permutation):
     [(argnum, in_axis, in_stride)] = inscanvars
     assert argnum == 0
     out_axis = _perm_inverse(permutation)[in_axis]
@@ -287,9 +287,9 @@ def transpose_scanify_rule(inscanvars, operand, permutation):
             ), [out_axis]
         )
     return None, body_fn, [(0, out_axis, in_stride)], []
-register_scanify_rule(lax.transpose_p, transpose_scanify_rule)
+register_rule(lax.transpose_p, transpose_rule)
 
-def conv_general_dilated_scanify_rule(
+def conv_general_dilated_rule(
     inscanvars, lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
     dimension_numbers, feature_group_count, batch_group_count, precision,
     preferred_element_type
@@ -307,7 +307,7 @@ def conv_general_dilated_scanify_rule(
                 "Global scan is not yet supported over conv lhs batch axis "
                 "with batch_group_count > 1."
             )
-        return batch_scanify_rule(
+        return batch_rule(
             lax.conv_general_dilated_p, inscanvars, lhs, rhs,
             window_strides=window_strides, padding=padding,
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
@@ -390,11 +390,11 @@ def conv_general_dilated_scanify_rule(
         return (i + 1, carry_new), out
     return carry_init, body_fn, [(0, outscan_axis, outscan_stride)], []
 
-register_scanify_rule(
-    lax.conv_general_dilated_p, conv_general_dilated_scanify_rule
+register_rule(
+    lax.conv_general_dilated_p, conv_general_dilated_rule
 )
 
-def slice_scanify_rule(
+def slice_rule(
    inscanvars, operand, start_indices, limit_indices, strides
 ):
     [(_, in_axis, in_stride)] = inscanvars
@@ -428,9 +428,9 @@ def slice_scanify_rule(
 
     out_stride = in_stride * (strides[in_axis] if strides is not None else 1)
     return None, body_fn, [(0, in_axis, in_stride * out_stride)], []
-register_scanify_rule(lax.slice_p, slice_scanify_rule)
+register_rule(lax.slice_p, slice_rule)
 
-def pad_scanify_rule(
+def pad_rule(
     inscanvars, operand, padding_value, padding_config
 ):
     assert len(inscanvars) == 1
@@ -464,9 +464,9 @@ def pad_scanify_rule(
             lambda: ans,
         )
     return 0, body_fn, [(0, axis, out_stride)], []
-register_scanify_rule(lax.pad_p, pad_scanify_rule)
+register_rule(lax.pad_p, pad_rule)
 
-def concatenate_scanify_rule(inscanvars, *operands, dimension):
+def concatenate_rule(inscanvars, *operands, dimension):
     argnums, axes, instrides = unzip3(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
@@ -501,9 +501,9 @@ def concatenate_scanify_rule(inscanvars, *operands, dimension):
             lambda: ans,
         )
     return carry_init, body_fn, [(0, axis, instride)], []
-register_scanify_rule(lax.concatenate_p, concatenate_scanify_rule)
+register_rule(lax.concatenate_p, concatenate_rule)
 
-def dot_general_scanify_rule(
+def dot_general_rule(
     inscanvars, lhs, rhs, dimension_numbers, precision, preferred_element_type,
     out_sharding,
 ):
@@ -613,9 +613,9 @@ def dot_general_scanify_rule(
                 lambda: ans
             )
     return 0, body_fn, [(0, out_axis, stride)], []
-register_scanify_rule(lax.dot_general_p, dot_general_scanify_rule)
+register_rule(lax.dot_general_p, dot_general_rule)
 
-def reshape_scanify_rule(
+def reshape_rule(
     inscanvars, operand, *dyn_shape, new_sizes, dimensions, sharding
 ):
     if dyn_shape:
@@ -654,9 +654,9 @@ def reshape_scanify_rule(
             x, new_sizes=new_sizes, dimensions=dimensions, sharding=sharding
         )
     return None, body_fn, [(0, a, stride)], []
-register_scanify_rule(lax.reshape_p, reshape_scanify_rule)
+register_rule(lax.reshape_p, reshape_rule)
 
-def split_scanify_rule(inscanvars, operand, sizes, axis):
+def split_rule(inscanvars, operand, sizes, axis):
     [(_, scan_axis, stride)] = inscanvars
     if scan_axis == axis:
         raise ScanConversionError(
@@ -668,4 +668,4 @@ def split_scanify_rule(inscanvars, operand, sizes, axis):
         return None, lax.split(x, sizes, axis_)
     outscanvars = [(n, scan_axis, stride) for n in range(len(sizes))]
     return None, body_fn, outscanvars, []
-register_scanify_rule(lax.split_p, split_scanify_rule)
+register_rule(lax.split_p, split_rule)
