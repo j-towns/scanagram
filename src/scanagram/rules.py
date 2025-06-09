@@ -193,8 +193,10 @@ def reduce_rule(op, inscanvars, xs_aval, axes):
 for op in reduce_ops:
     register_rule(op, partial(reduce_rule, op))
 
-def scan_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
-                      linear, num_carry, num_consts, reverse, unroll):
+def scan_rule(
+    inscanvars, *xs_avals, _split_transpose, jaxpr, length, linear, num_carry,
+    num_consts, reverse, unroll
+):
     scanvar_argnums, scanvar_axes, scanvar_strides = unzip3(inscanvars)
     xs_argnums = set(range(num_consts + num_carry, len(xs_avals)))
     if not set(scanvar_argnums) <= xs_argnums:
@@ -245,8 +247,9 @@ def scan_rule(inscanvars, *xs_avals, _split_transpose, jaxpr, length,
     return (0, carry), body_fun, out_scanvars, out_to_delete
 register_rule(lax.scan_p, scan_rule)
 
-def broadcast_in_dim_rule(inscanvars, operand, shape,
-                                  broadcast_dimensions, sharding):
+def broadcast_in_dim_rule(
+    inscanvars, operand, shape, broadcast_dimensions, sharding
+):
     [(_, inscan_axis, stride)] = inscanvars
     if sharding is not None:
         raise ScanConversionError(
@@ -436,7 +439,7 @@ def pad_rule(
     assert len(inscanvars) == 1
     [(argnum, axis, in_stride)] = inscanvars
     assert argnum == 0  # Shouldn't be possible to scan over scalar
-                           # padding_value
+                        # padding_value
     scan_pad_start, scan_pad_end, scan_pad_interior = padding_config[axis]
     if not scan_pad_start == 0:
         raise ScanConversionError(
@@ -626,7 +629,8 @@ def reshape_rule(
     [(argnum, axis, stride)] = inscanvars
     if sharding is not None:
         raise ScanConversionError(
-            "Sharding is currently not supported in scan conversion of reshape."
+            "Sharding is currently not supported in scan conversion of "
+            "reshape."
         )
     if dimensions is None:
         dimensions = tuple(range(operand.ndim))
@@ -640,7 +644,6 @@ def reshape_rule(
         size = size * new_sizes[a]
     if operand.shape[axis] != new_sizes[a]:
         raise ScanConversionError("Reshape must preserve scanned axis.")
-    out_axis = a
     new_sizes = list(new_sizes)
     new_sizes.pop(a)
     new_sizes = tuple(new_sizes)
