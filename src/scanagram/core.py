@@ -9,6 +9,7 @@ from jax.core import Atom, AbstractValue
 from jax._src.pjit import pjit_p
 
 from scanagram.util import safe_map
+from scanagram.custom_rules import custom_rules
 
 
 map = safe_map
@@ -199,6 +200,10 @@ def pjit_rule(
     compiler_options_kvs,
 ):
     # TODO: Figure out how to handle (non-default cases of) all the params
+    if name.startswith("custom_scanagram_"):
+        name = name[len("custom_scanagram_"):]
+        if name in custom_rules:
+            return custom_rules[name](inscanvars, *args)
     return call_rule(inscanvars, jaxpr, *args)
 register_rule(pjit_p, pjit_rule)
 
