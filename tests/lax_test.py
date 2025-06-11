@@ -315,15 +315,15 @@ def test_nary(op_name, argnum, rng_factory, shapes, dtype, tol):
 
 def test_nary_other_axis():
     rng = np.random.RandomState(0)
-    xs = rng.randn(2, 3, 4)
-    y = rng.randn(3, 2, 4)
+    xs = rng.randn(2, 3, 4).astype("float32")
+    y = rng.randn(3, 2, 4).astype("float32")
     def f(xs):
         return jnp.moveaxis(lax.add(jnp.moveaxis(xs, 0, 1), y), 1, 0)
     test_util.check_scan(f, xs)
 
 def test_nary_strided():
     rng = np.random.RandomState(0)
-    xs = rng.randn(12, 3)
+    xs = rng.randn(12, 3).astype("float32")
     def f(xs):
         ys = lax.slice_in_dim(xs, 0, 12, 2)
         zs = 2 * ys
@@ -332,8 +332,8 @@ def test_nary_strided():
 
 def test_nary_strided2():
     rng = np.random.RandomState(0)
-    xs = rng.randn(12, 3)
-    bs = rng.randn(6, 3)
+    xs = rng.randn(12, 3).astype("float32")
+    bs = rng.randn(6, 3).astype("float32")
     def f(xs):
         ys = lax.slice_in_dim(xs, 0, 12, 2)
         zs = bs * ys
@@ -356,46 +356,46 @@ def test_reduce_named(op, shape, axes, dtype):
 
 def test_scan():
     rng = np.random.RandomState(0)
-    init_carry = np.zeros(2)
+    init_carry = np.zeros(2, "float32")
     def f(xs):
         carry_out, ys = lax.scan(
             lambda carry, x: (carry + x, carry + x), init_carry, xs
         )
         return ys
-    xs = rng.randn(5, 2)
+    xs = rng.randn(5, 2).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_scan_strided():
     rng = np.random.RandomState(0)
-    init_carry = np.zeros(2)
+    init_carry = np.zeros(2, "float32")
     def f(xs):
         ys = lax.slice_in_dim(xs, 0, 6, 2)
         carry_out, zs = lax.scan(
             lambda carry, x: (carry + x, carry + x), init_carry, ys
         )
         return lax.pad(zs, 0., [(0, 1, 1), (0, 0, 0)])
-    xs = rng.randn(6, 2)
+    xs = rng.randn(6, 2).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_transpose():
     rng = np.random.RandomState(0)
     def f(xs):
         return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
-    xs = rng.randn(2, 3, 4)
+    xs = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_transpose_wrong_axis():
     rng = np.random.RandomState(0)
     def f(xs):
         return lax.transpose(xs, (1, 2, 0))
-    xs = rng.randn(2, 3, 4)
+    xs = rng.randn(2, 3, 4).astype("float32")
     np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
 
 def test_broadcast_in_dim():
     rng = np.random.RandomState(0)
     def f(xs):
         return lax.broadcast_in_dim(xs, (2, 3, 4, 5), (0, 1, 2))
-    xs = rng.randn(2, 1, 4)
+    xs = rng.randn(2, 1, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_broadcast_in_dim_other_axis():
@@ -405,7 +405,7 @@ def test_broadcast_in_dim_other_axis():
         return jnp.moveaxis(
             lax.broadcast_in_dim(xs, (3, 2, 4, 5), (0, 1, 2)), 1, 0
         )
-    xs = rng.randn(2, 1, 4)
+    xs = rng.randn(2, 1, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_broadcast_in_dim_broadcast_dimensions():
@@ -414,13 +414,13 @@ def test_broadcast_in_dim_broadcast_dimensions():
         xs = jnp.moveaxis(xs, 0, 1)
         ys = lax.broadcast_in_dim(xs, (1, 2, 3, 4), (1, 2, 3))
         return jnp.moveaxis(ys, 2, 0)
-    xs = rng.randn(3, 2, 4)
+    xs = rng.randn(3, 2, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_conv_batch():
     rng = np.random.RandomState(0)
-    lhs = rng.randn(2, 3, 4, 5)
-    rhs = rng.randn(1, 2, 5, 6)
+    lhs = rng.randn(2, 3, 4, 5).astype("float32")
+    rhs = rng.randn(1, 2, 5, 6).astype("float32")
     def f(x):
         return lax.conv_general_dilated(
             x, rhs, window_strides=[1, 1], padding="VALID",
@@ -431,8 +431,8 @@ def test_conv_batch():
 def test_conv_causal():
     window_size = 2
     rng = np.random.RandomState(0)
-    lhs = rng.randn(6, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    lhs = rng.randn(6, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         return lax.conv_general_dilated(
             x, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
@@ -444,8 +444,8 @@ def test_conv_rhs_dilation():
     window_size = 2
     rhs_dilation = 2
     rng = np.random.RandomState(0)
-    lhs = rng.randn(12, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    lhs = rng.randn(12, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         return lax.conv_general_dilated(
             x, rhs, window_strides=[1], padding=[(
@@ -459,8 +459,8 @@ def test_conv_in_stride():
     window_size = 3
     in_stride = 2
     rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    x = rng.randn(12, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         y = lax.slice_in_dim(x, 0, 12, in_stride)
         z = lax.conv_general_dilated(
@@ -475,8 +475,8 @@ def test_conv_window_stride():
     window_size = 2
     window_stride = 3
     rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    x = rng.randn(12, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         y = lax.conv_general_dilated(
             x, rhs, window_strides=[window_stride],
@@ -492,8 +492,8 @@ def test_conv_in_stride_window_stride():
     in_stride = 2
     window_stride = 3
     rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    x = rng.randn(12, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         y = lax.slice_in_dim(x, 0, 12, in_stride)
         z = lax.conv_general_dilated(
@@ -511,8 +511,8 @@ def test_conv_lhs_dilation():
     window_size = 5
     lhs_dilation = 3
     rng = np.random.RandomState(0)
-    lhs = rng.randn(12, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    lhs = rng.randn(12, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         y = lax.slice_in_dim(x, 0, 12, 3)
         return lax.conv_general_dilated(
@@ -527,7 +527,7 @@ def test_conv_window_stride_lhs_dilation():
     window_size = 2
     lhs_dilation = 3
     rng = np.random.RandomState(0)
-    lhs = rng.randn(12, 4, 5)
+    lhs = rng.randn(12, 4, 5).astype("float32")
     rhs = rng.randn(window_size, 5, 6)
     def f(x):
         y = lax.slice_in_dim(x, 0, 12, 3)
@@ -543,8 +543,8 @@ def test_conv_window_stride_lhs_dilation():
 def test_conv_transposed():
     window_size = 2
     rng = np.random.RandomState(0)
-    lhs = rng.randn(6, 4, 5)
-    rhs = rng.randn(window_size, 5, 6)
+    lhs = rng.randn(6, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
     def f(x):
         y = jnp.moveaxis(x, 0, 1)
         return jnp.moveaxis(lax.conv_general_dilated(
@@ -555,28 +555,28 @@ def test_conv_transposed():
 
 def test_slice():
     rng = np.random.RandomState(0)
-    operand = rng.randn(6, 4, 5)
+    operand = rng.randn(6, 4, 5).astype("float32")
     def f(operand):
         return lax.slice(operand, (0, 2, 1), (6, 3, 5), (1, 1, 2))
     test_util.check_scan(f, operand)
 
 def test_slice_none_stride():
     rng = np.random.RandomState(0)
-    operand = rng.randn(6, 4, 5)
+    operand = rng.randn(6, 4, 5).astype("float32")
     def f(operand):
         return lax.slice(operand, (0, 2, 1), (6, 3, 5))
     test_util.check_scan(f, operand)
 
 def test_pad():
     rng = np.random.RandomState(0)
-    operand = rng.randn(6, 4)
+    operand = rng.randn(6, 4).astype("float32")
     def f(operand):
         return lax.pad(operand, 3., [(0, 0, 0), (1, 2, 3)])
     test_util.check_scan(f, operand)
 
 def tests_slice_then_pad():
     rng = np.random.RandomState(0)
-    operand = rng.randn(6, 4)
+    operand = rng.randn(6, 4).astype("float32")
     def f(operand):
         sliced = lax.slice(operand, (0, 0), (6, 4), (2, 1))
         return lax.pad(sliced, 3., [(0, 1, 1), (0, 0, 0)])
@@ -584,14 +584,14 @@ def tests_slice_then_pad():
 
 def test_concatenate():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4), rng.randn(6, 3)
+    x, y = rng.randn(6, 4).astype("float32"), rng.randn(6, 3).astype("float32")
     def f(x):
         return lax.concatenate([x, y], 1)
     test_util.check_scan(f, x)
 
 def test_concatenate_strided():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4), rng.randn(3, 3)
+    x, y = rng.randn(6, 4).astype("float32"), rng.randn(3, 3).astype("float32")
     def f(x):
         return lax.pad(
             lax.concatenate([lax.slice_in_dim(x, 0, 6, 2), y], 1),
@@ -602,7 +602,7 @@ def test_concatenate_strided():
 
 def test_concatenate_both_scanned():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4), rng.randn(6, 3)
+    x, y = rng.randn(6, 4).astype("float32"), rng.randn(6, 3).astype("float32")
     def f(x_and_y):
         x, y = x_and_y
         return lax.concatenate([x, y], 1)
@@ -610,7 +610,10 @@ def test_concatenate_both_scanned():
 
 def test_dot_general_both_batch():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(6, 4, 3).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(x_and_y):
         x, y = x_and_y
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
@@ -618,14 +621,20 @@ def test_dot_general_both_batch():
 
 def test_dot_general_lhs_batch():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(6, 4, 3).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(x):
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
     test_util.check_scan(f, x)
 
 def test_dot_general_lhs_batch_strided():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4, 3), rng.randn(3, 3, 4)
+    x, y = (
+        rng.randn(6, 4, 3).astype("float32"),
+        rng.randn(3, 3, 4).astype("float32")
+    )
     def f(x):
         x = lax.slice_in_dim(x, 0, 6, 2)
         z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
@@ -634,7 +643,10 @@ def test_dot_general_lhs_batch_strided():
 
 def test_dot_general_lhs_non_batch():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 3, 4), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(6, 3, 4).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(x):
         return lax.dot_general(
             jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
@@ -643,14 +655,20 @@ def test_dot_general_lhs_non_batch():
 
 def test_dot_general_rhs_batch():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4, 3), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(6, 4, 3).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(y):
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
     test_util.check_scan(f, y)
 
 def test_dot_general_rhs_batch_strided():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(3, 4, 3), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(3, 4, 3).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(y):
         y = lax.slice_in_dim(y, 0, 6, 2)
         z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
@@ -659,7 +677,10 @@ def test_dot_general_rhs_batch_strided():
 
 def test_dot_general_rhs_non_batch():
     rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 3, 4), rng.randn(6, 3, 4)
+    x, y = (
+        rng.randn(6, 3, 4).astype("float32"),
+        rng.randn(6, 3, 4).astype("float32")
+    )
     def f(y):
         return lax.dot_general(
             jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
@@ -668,7 +689,7 @@ def test_dot_general_rhs_non_batch():
 
 def test_reshape_pre():
     rng = np.random.RandomState(0)
-    x = rng.randn(3, 6, 4)
+    x = rng.randn(3, 6, 4).astype("float32")
     def f(x):
         x = jnp.moveaxis(x, 0, 1)
         return jnp.moveaxis(lax.reshape(x, (3, 2, 3, 4)), 2, 0)
@@ -676,21 +697,21 @@ def test_reshape_pre():
 
 def test_reshape_post():
     rng = np.random.RandomState(0)
-    x = rng.randn(3, 6, 4)
+    x = rng.randn(3, 6, 4).astype("float32")
     def f(x):
         return lax.reshape(x, (3, 2, 3, 4))
     test_util.check_scan(f, x)
 
 def test_reshape_dimensions():
     rng = np.random.RandomState(0)
-    x = rng.randn(3, 6, 4)
+    x = rng.randn(3, 6, 4).astype("float32")
     def f(x):
         return jnp.moveaxis(lax.reshape(x, (2, 3, 4, 3), (1, 2, 0)), 3, 0)
     test_util.check_scan(f, x)
 
 def test_reshape_dimensions():
     rng = np.random.RandomState(0)
-    x = rng.randn(3, 6, 4)
+    x = rng.randn(3, 6, 4).astype("float32")
     def f(x):
         return jnp.moveaxis(lax.reshape(x, (2, 3, 4, 3), (1, 2, 0)), 3, 0)
     test_util.check_scan(f, x)
@@ -701,7 +722,7 @@ def test_pjit():
     @jax.jit
     def f(xs):
         return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
-    xs = rng.randn(2, 3, 4)
+    xs = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_pjit_second_arg_scanned():
@@ -709,8 +730,8 @@ def test_pjit_second_arg_scanned():
 
     def f(xs):
         return jax.jit(jnp.add)(xs, ys)
-    xs = rng.randn(2, 3, 4)
-    ys = rng.randn(2, 3, 4)
+    xs = rng.randn(2, 3, 4).astype("float32")
+    ys = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_split():
@@ -718,7 +739,7 @@ def test_split():
 
     def f(xs):
         return lax.split(xs, (2, 4), 1)
-    xs = rng.randn(2, 6)
+    xs = rng.randn(2, 6).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_custom_vjp():
@@ -733,5 +754,5 @@ def test_custom_vjp():
         lambda res, g: (2 * g,),
     )
 
-    xs = rng.randn(2, 6)
+    xs = rng.randn(2, 6).astype("float32")
     test_util.check_scan(f, xs)
