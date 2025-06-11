@@ -3,20 +3,13 @@ from itertools import repeat
 import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
-from scanagram.util import safe_map, unzip3, safe_zip
+from scanagram.util import safe_map, unzip3, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
 
 map = safe_map
 zip = safe_zip
 
-
-def all_equal(xs):
-    if len(xs) == 0:
-        return True
-    else:
-        x, *xs = xs
-        return all(y == x for y in xs)
 
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
     # Used when scanning along a batch dimension of op

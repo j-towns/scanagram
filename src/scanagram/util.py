@@ -1,3 +1,4 @@
+###############################################################################
 # Copyright 2018 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,3 +59,12 @@ def safe_zip(*args):
     for arg in args[1:]:
         assert len(arg) == n, f'length mismatch: {list(map(len, args))}'
     return list(zip(*args))
+
+###############################################################################
+
+def all_equal(xs):
+    if len(xs) == 0:
+        return True
+    else:
+        x, *xs = xs
+        return all(y == x for y in xs)

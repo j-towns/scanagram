@@ -19,7 +19,7 @@ def register_rule(p: Primitive, rule):
     rules[p] = rule
 
 ###############################################################################
-# This section is copied from jax._src.core
+# This section is copied from jax/_src/core.py
 
 # Copyright 2018 The JAX Authors.
 #
