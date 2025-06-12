@@ -377,6 +377,37 @@ def test_scan_strided():
     xs = rng.randn(6, 2).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_scan_some_inputs():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2, "float32")
+    xs = rng.randn(6, 2).astype("float32")
+    ys = rng.randn(6, 2).astype("float32")
+
+    def body_fn(carry, x_and_y):
+        x, y = x_and_y
+        return carry + x, carry + y + x
+
+    def f(xs):
+        _, out = lax.scan(body_fn, init_carry, (xs, ys))
+        return out
+    test_util.check_scan(f, xs)
+
+def test_scan_some_inputs_strided():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2, "float32")
+    xs_unstrided = rng.randn(6, 2).astype("float32")
+    ys = rng.randn(3, 2).astype("float32")
+
+    def body_fn(carry, x_and_y):
+        x, y = x_and_y
+        return carry + x, carry + y + x
+
+    def f(xs_unstrided):
+        xs = lax.slice_in_dim(xs_unstrided, 0, 6, 2)
+        _, out = lax.scan(body_fn, init_carry, (xs, ys))
+        return lax.pad(out, 0., ((0, 1, 1), (0, 0, 0)))
+    test_util.check_scan(f, xs_unstrided)
+
 def test_transpose():
     rng = np.random.RandomState(0)
     def f(xs):

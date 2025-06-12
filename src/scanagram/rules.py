@@ -196,12 +196,12 @@ def scan_rule(
         raise ScanConversionError(
             "Global scan along an axis of a constant or carry in a call to "
             "scan. This is not currently supported, but could be in future.")
-    if set(scanvar_argnums) != xs_argnums:
-        # TODO: Make this error more specific
-        raise ScanConversionError(
-            "Global scan over some, but not all, of the inputs of a scan is "
-            "not currently suppoorted."
-        )
+    #if set(scanvar_argnums) != xs_argnums:
+    #    # TODO: Make this error more specific
+    #    raise ScanConversionError(
+    #        "Global scan over some, but not all, of the inputs of a scan is "
+    #        "not currently suppoorted."
+    #    )
     if not all(a == 0 for a in scanvar_axes):
         # TODO: Make this error more specific
         raise ScanConversionError(
@@ -216,6 +216,11 @@ def scan_rule(
     )
     def body_fun(i_and_carry, *args):
         i, old_carry = i_and_carry
+        args = tuple(
+            a if n in scanvar_argnums else
+            lax.dynamic_index_in_dim(a, i // stride, keepdims=False)
+            for n, a in enumerate(args)
+        )
         new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
             consts + old_carry + args[num_consts + num_carry:]
         ))
