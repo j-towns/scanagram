@@ -35,4 +35,3 @@ def check_types(xt, yt, xt_name, yt_name, scan_input=False):
             f"{xt_name} contains one or more arrays with different shapes "
             f"to {yt_name}."
         )
-

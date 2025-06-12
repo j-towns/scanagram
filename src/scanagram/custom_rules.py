@@ -36,14 +36,14 @@ zip, unsafe_zip = util.safe_zip, zip
 # limitations under the License.
 
 def _convert_constvars_jaxpr(jaxpr):
-  """Moves the constvars to the start of invars."""
-  dbg = jaxpr.debug_info._replace(
-      arg_names=("",) * len(jaxpr.constvars) + jaxpr.debug_info.arg_names)
-  lifted_jaxpr = Jaxpr(constvars=(),
-                       invars=jaxpr.constvars + jaxpr.invars,
-                       outvars=jaxpr.outvars, eqns=jaxpr.eqns,
-                       effects=jaxpr.effects, debug_info=dbg)
-  return lifted_jaxpr
+    """Moves the constvars to the start of invars."""
+    dbg = jaxpr.debug_info._replace(
+        arg_names=("",) * len(jaxpr.constvars) + jaxpr.debug_info.arg_names)
+    lifted_jaxpr = Jaxpr(constvars=(),
+                         invars=jaxpr.constvars + jaxpr.invars,
+                         outvars=jaxpr.outvars, eqns=jaxpr.eqns,
+                         effects=jaxpr.effects, debug_info=dbg)
+    return lifted_jaxpr
 
 ###############################################################################
 
