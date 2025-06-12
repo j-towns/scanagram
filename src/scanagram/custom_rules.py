@@ -10,6 +10,8 @@ from jax.interpreters import ad, mlir
 from jax._src.interpreters import xla
 from jax import ShapeDtypeStruct
 from jax import jvp
+from jax.extend.linear_util import wrap_init
+from jax.api_util import debug_info
 
 from scanagram import util
 from scanagram.core import ScanConversionError, register_rule
@@ -139,7 +141,11 @@ def custom_scanagram_abstract_eval(*in_avals, call, **kwargs):
     return call.out_avals
 
 def custom_scanagram_jvp(primals, tangents, *, call, rule, in_tree, out_tree):
-    return jvp(jaxpr_as_fun(call), primals, tangents)
+    jvp_fun = ad.jvp(wrap_init(
+        jaxpr_as_fun(call),
+        debug_info=debug_info('jvp', jaxpr_as_fun(call), primals, {})
+    ))
+    return jvp_fun.call_wrapped(primals, tangents)
 
 custom_scanagram_p = Primitive("custom_scanagram_call")
 custom_scanagram_p.multiple_results = True

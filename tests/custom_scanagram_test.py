@@ -189,6 +189,34 @@ def test_custom_scanagram_jvp():
         jvp(f, (xs,), (tangents,)), jvp(f_ref, (xs,), (tangents,))
     )
 
+def test_custom_scanagram_jvp_zero():
+    xs_shape = (2,)
+    xs_dtype = jnp.dtype("float32")
+
+    xs = jnp.array([3., 5.])
+    ys = jnp.array([4., 6.])
+    tangents = jnp.array([1., 2.])
+
+    def f_ref(xs):
+        xs = ys + xs
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        return lax.scan(lambda c, x: (c + x, c + x), 0, xs)[1]
+
+    @custom_scanagram
+    def f(xs):
+        xs = ys + xs
+        return jnp.array([xs[0], xs[0] + xs[1]])
+
+    @f.def_scanagram
+    def f_scanagram_rule(scan_info, xs):
+        pass
+
+    jax_test_util.check_close(f_ref(xs), f(xs))
+    jax_test_util.check_close(
+        jvp(f, (xs,), (tangents,)), jvp(f_ref, (xs,), (tangents,))
+    )
+
 def test_custom_scanagram_grad():
     xs_shape = (2,)
     xs_dtype = jnp.dtype("float32")
