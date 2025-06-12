@@ -9,6 +9,7 @@ from jax import tree_util
 from jax.interpreters import ad, mlir
 from jax._src.interpreters import xla
 from jax import ShapeDtypeStruct
+from jax import jvp
 
 from scanagram import util
 from scanagram.core import ScanConversionError, register_rule
@@ -96,7 +97,7 @@ def custom_scanagram_rule(
             <= set(range(len(tree.leaves(consts)), len(args_flat)))):
         raise ScanConversionError(
             "Scanning over a variable which is closed over in a function "
-            "with custom scanagram rule defined is not supported"
+            "with the custom_scanagram decorator is not supported"
         )
     if set(argnums) != set(range(len(tree.leaves(consts)), len(args_flat))):
         raise ScanConversionError(
@@ -138,7 +139,7 @@ def custom_scanagram_abstract_eval(*in_avals, call, **kwargs):
     return call.out_avals
 
 def custom_scanagram_jvp(primals, tangents, *, call, rule, in_tree, out_tree):
-    raise NotImplementedError
+    return jvp(jaxpr_as_fun(call), primals, tangents)
 
 custom_scanagram_p = Primitive("custom_scanagram_call")
 custom_scanagram_p.multiple_results = True

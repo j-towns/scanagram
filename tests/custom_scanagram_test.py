@@ -1,6 +1,7 @@
 from jax import ShapeDtypeStruct
 import jax.numpy as jnp
 from jax import lax
+from jax import jit, jvp, grad
 
 from scanagram import custom_scanagram, ScanInfo
 from scanagram import jax_test_util
@@ -124,3 +125,100 @@ def test_custom_scanagram_out_pytree():
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
+
+def test_custom_scanagram_jit():
+    xs_shape = (2,)
+    xs_dtype = jnp.dtype("int32")
+
+    xs = jnp.array([3, 5])
+
+    def f_ref(xs):
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        return lax.scan(lambda c, x: (c + x, c + x), 0, xs)[1]
+
+    @custom_scanagram
+    def f(xs):
+        return jnp.array([xs[0], xs[0] + xs[1]])
+
+    @f.def_scanagram
+    def f_scanagram_rule(scan_info, xs):
+        assert type(xs) is ShapeDtypeStruct
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        carry_init = 0
+        def body_fn(c, x):
+            return c + x, c + x
+        return ScanInfo(0, 1), body_fn, carry_init
+
+    f = jit(f)
+    jax_test_util.check_close(f_ref(xs), f(xs))
+    test_util.check_scan(f, xs)
+
+def test_custom_scanagram_jvp():
+    xs_shape = (2,)
+    xs_dtype = jnp.dtype("float32")
+
+    xs = jnp.array([3., 5.])
+    tangents = jnp.array([1., 2.])
+
+    def f_ref(xs):
+        xs = xs ** 2
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        return lax.scan(lambda c, x: (c + x, c + x), 0, xs)[1]
+
+    @custom_scanagram
+    def f(xs):
+        xs = xs ** 2
+        return jnp.array([xs[0], xs[0] + xs[1]])
+
+    @f.def_scanagram
+    def f_scanagram_rule(scan_info, xs):
+        assert type(xs) is ShapeDtypeStruct
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        carry_init = 0
+        def body_fn(c, x):
+            x = x ** 2
+            return c + x, c + x
+        return ScanInfo(0, 1), body_fn, carry_init
+
+    jax_test_util.check_close(f_ref(xs), f(xs))
+    jax_test_util.check_close(
+        jvp(f, (xs,), (tangents,)), jvp(f_ref, (xs,), (tangents,))
+    )
+
+def test_custom_scanagram_grad():
+    xs_shape = (2,)
+    xs_dtype = jnp.dtype("float32")
+
+    xs = jnp.array([3., 5.])
+
+    def f_ref(xs):
+        xs = xs ** 2
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        return lax.scan(lambda c, x: (c + x, c + x), 0, xs)[1]
+
+    @custom_scanagram
+    def f(xs):
+        xs = xs ** 2
+        return jnp.array([xs[0], xs[0] + xs[1]])
+
+    @f.def_scanagram
+    def f_scanagram_rule(scan_info, xs):
+        assert type(xs) is ShapeDtypeStruct
+        assert xs.shape == xs_shape
+        assert xs.dtype == xs_dtype
+        carry_init = 0
+        def body_fn(c, x):
+            x = x ** 2
+            return c + x, c + x
+        return ScanInfo(0, 1), body_fn, carry_init
+
+    jax_test_util.check_close(f_ref(xs), f(xs))
+    jax_test_util.check_close(
+        grad(lambda xs: jnp.sum(f(xs)))(xs),
+        grad(lambda xs: jnp.sum(f_ref(xs)))(xs)
+    )
