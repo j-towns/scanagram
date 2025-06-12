@@ -756,3 +756,10 @@ def test_custom_vjp():
 
     xs = rng.randn(2, 6).astype("float32")
     test_util.check_scan(f, xs)
+
+def test_squeeze():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(3, 1, 4).astype("float32")
+    def f(xs):
+        return lax.squeeze(xs, [1])
+    test_util.check_scan(f, xs)

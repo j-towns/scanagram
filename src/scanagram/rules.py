@@ -665,3 +665,11 @@ def split_rule(inscanvars, operand, sizes, axis):
     outscanvars = [(n, scan_axis, stride) for n in range(len(sizes))]
     return None, body_fn, outscanvars, []
 register_rule(lax.split_p, split_rule)
+
+def squeeze_rule(inscanvars, array, dimensions):
+    [(_, axis, stride)] = inscanvars
+    if axis in dimensions:
+        # TODO: Maybe this is actually fine?
+        raise ScanConversionError("Cannot squeeze scanned axis.")
+    return batch_rule(lax.squeeze_p, inscanvars, array, dimensions=dimensions)
+register_rule(lax.squeeze_p, squeeze_rule)
