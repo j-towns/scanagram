@@ -788,6 +788,18 @@ def test_custom_vjp():
     xs = rng.randn(2, 6).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_custom_jvp():
+    rng = np.random.RandomState(0)
+
+    @jax.custom_jvp
+    def f(xs):
+        return 2 * xs
+
+    f.defjvp(lambda xs, ts: (2 * xs, 2 * ts))
+
+    xs = rng.randn(2, 6).astype("float32")
+    test_util.check_scan(f, xs)
+
 def test_squeeze():
     rng = np.random.RandomState(0)
     xs = rng.randn(3, 1, 4).astype("float32")
