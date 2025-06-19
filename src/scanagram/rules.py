@@ -199,12 +199,6 @@ def scan_rule(
         raise ScanConversionError(
             "Global scan along an axis of a constant or carry in a call to "
             "scan. This is not currently supported, but could be in future.")
-    #if set(scanvar_argnums) != xs_argnums:
-    #    # TODO: Make this error more specific
-    #    raise ScanConversionError(
-    #        "Global scan over some, but not all, of the inputs of a scan is "
-    #        "not currently suppoorted."
-    #    )
     if not all(a == 0 for a in scanvar_axes):
         # TODO: Make this error more specific
         raise ScanConversionError(
