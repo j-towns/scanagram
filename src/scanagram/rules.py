@@ -5,29 +5,52 @@ from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
 from jax._src.pjit import pjit_p
-from scanagram.util import safe_map, unzip3, safe_zip, all_equal
+from scanagram.util import safe_map, unzip3, unzip4, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
+from scanagram.core import ScanInfo
 
 map = safe_map
 zip = safe_zip
 
 
+def unzip_scanvars(scanvars):
+    argnums = []
+    axes = []
+    strides = []
+    prefills = []
+    for n, s in scanvars:
+        argnums.append(n)
+        axes.append(s.axis)
+        strides.append(s.stride)
+        prefills.append(s.prefill)
+    return argnums, axes, strides, prefills
+
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
     # Used when scanning along a batch dimension of op
     assert not op.multiple_results
-    _, scanvar_axes, strides = unzip3(inscanvars)
-    assert all_equal(scanvar_axes)
+    argnums, axes, strides, prefills = unzip_scanvars(inscanvars)
+    assert all_equal(axes)
     assert all_equal(strides)
-    axis, stride = scanvar_axes[0], strides[0]
+    axis, stride = axes[0], strides[0]
+    assert all_equal(p.shape[axis] for p in prefills)
+    prefill_len = prefills[0].shape[axis]
+    assert not prefill_len % stride
+    prefills_map = dict(zip(argnums, prefills))
+    prefills = [
+        prefills_map[n] if n in prefills_map
+        else lax.slice_in_dim(a, 0, prefill_len)
+        for n, a in enumerate(in_avals)
+    ]
+    out_prefill = op.bind(*prefills, **bind_params)
     if stride == 1:
         carry_init = None
 
         def body_fn(carry, *args):
             assert carry is None
             args = list(args)
-            for argnum, axis, _ in inscanvars:
+            for argnum, axis in zip(argnums, axes):
                 args[argnum] = jnp.expand_dims(args[argnum], axis)
             ans = op.bind(*args, **bind_params)
             return None, lax.squeeze(ans, [axis])
@@ -44,7 +67,7 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
                 lambda: jnp.zeros_like(ans),
                 lambda: ans,
             )
-    return carry_init, body_fn, [(0, axis, stride)], []
+    return carry_init, body_fn, [(0, ScanInfo(axis, stride, out_prefill))], []
 
 nary_ops = [
     lax.abs_p,
@@ -178,7 +201,7 @@ reduce_ops = [
     lax.reduce_xor_p,
 ]
 def reduce_rule(op, inscanvars, xs_aval, axes):
-    _, [inscan_axis], _ = unzip3(inscanvars)
+    _, [inscan_axis], _, _ = unzip_scanvars(inscanvars)
     if inscan_axis in set(axes):
         raise ScanConversionError(
             "Global scan operating along reduce axis is not supported."
@@ -465,7 +488,7 @@ def pad_rule(
 register_rule(lax.pad_p, pad_rule)
 
 def concatenate_rule(inscanvars, *operands, dimension):
-    argnums, axes, instrides = unzip3(inscanvars)
+    argnums, axes, instrides, prefills = unzip3(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
             "All scanned arguments to concatenate must be scanned along the "

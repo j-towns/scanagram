@@ -53,6 +53,18 @@ def unzip3(xyzs: Iterable[tuple[T1, T2, T3]]
         zs.append(z)
     return tuple(xs), tuple(ys), tuple(zs)
 
+def unzip4(vxyzs):
+    vs = []
+    xs = []
+    ys = []
+    zs = []
+    for v, x, y, z in xyzs:
+        vs.append(v)
+        xs.append(x)
+        ys.append(y)
+        zs.append(z)
+    return tuple(vs), tuple(xs), tuple(ys), tuple(zs)
+
 def safe_zip(*args):
     args = list(map(list, args))
     n = len(args[0])
@@ -63,6 +75,7 @@ def safe_zip(*args):
 ###############################################################################
 
 def all_equal(xs):
+    xs = list(xs)
     if len(xs) == 0:
         return True
     else:

@@ -354,6 +354,23 @@ def test_reduce_named(op, shape, axes, dtype):
     fun = functools.partial(op, axes=axes)
     test_util.check_scan(fun, arg)
 
+@pytest.mark.parametrize(
+    'op,shape,axes,dtype',
+    [(rec.op, shape, axes, dtype)
+     for rec in lax_named_reduce_ops()
+     for (shape, axes) in [[(3, 4, 5), (1,)], [(3, 4, 5), (1, 2)]]
+     for dtype in rec.dtypes])
+def test_reduce_named_prefill(op, shape, axes, dtype):
+    rng_factory = (jtu.rand_default if dtypes.issubdtype(dtype, np.integer)
+                   else jtu.rand_small)
+    rng = rng_factory(np.random)
+    arg = rng(shape, dtype)
+    prefill = rng(shape, dtype)
+    def fun(x):
+        result = op(jnp.concatenate([prefill, x], 0), axes=axes)
+        return lax.slice_in_dim(result, len(prefill), len(x))
+    test_util.check_scan(fun, arg)
+
 def test_scan():
     rng = np.random.RandomState(0)
     init_carry = np.zeros(2, "float32")
