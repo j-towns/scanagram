@@ -2,6 +2,7 @@ from functools import partial
 from itertools import repeat
 import numpy as np
 from jax import numpy as jnp, lax
+from jax import tree
 from jax.extend.core import jaxpr_as_fun
 from scanagram.util import safe_map, unzip3, safe_zip, all_equal
 
@@ -18,29 +19,29 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
     assert all_equal(scanvar_axes)
     assert all_equal(strides)
     axis, stride = scanvar_axes[0], strides[0]
-    if stride == 1:
-        carry_init = None
+    #if stride == 1:
+    carry_init = None
 
-        def body_fn(carry, *args):
-            assert carry is None
-            args = list(args)
-            for argnum, axis, _ in inscanvars:
-                args[argnum] = jnp.expand_dims(args[argnum], axis)
-            ans = op.bind(*args, **bind_params)
-            return None, lax.squeeze(ans, [axis])
-    else:
-        carry_init = 0
+    def body_fn(carry, *args):
+        assert carry is None
+        args = list(args)
+        for argnum, axis, _ in inscanvars:
+            args[argnum] = jnp.expand_dims(args[argnum], axis)
+        ans = op.bind(*args, **bind_params)
+        return None, lax.squeeze(ans, [axis])
+    #else:
+    #    carry_init = 0
 
-        def body_fn(i, *args):
-            args = list(args)
-            for argnum, axis, _ in inscanvars:
-                args[argnum] = jnp.expand_dims(args[argnum], axis)
-            ans = lax.squeeze(op.bind(*args, **bind_params), [axis])
-            return i + 1, lax.cond(
-                i % stride,
-                lambda: jnp.zeros_like(ans),
-                lambda: ans,
-            )
+    #    def body_fn(i, *args):
+    #        args = list(args)
+    #        for argnum, axis, _ in inscanvars:
+    #            args[argnum] = jnp.expand_dims(args[argnum], axis)
+    #        ans = lax.squeeze(op.bind(*args, **bind_params), [axis])
+    #        return i + 1, lax.cond(
+    #            i % stride,
+    #            lambda: jnp.zeros_like(ans),
+    #            lambda: ans,
+    #        )
     return carry_init, body_fn, [(0, axis, stride)], []
 
 nary_ops = [
@@ -151,12 +152,12 @@ def nary_op_rule(op, inscanvars, *avals, **kwargs):
             ) for i, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
-        if stride > 1:
-            ans = lax.cond(
-                counter % stride,
-                lambda: jnp.zeros_like(ans),
-                lambda: ans,
-            )
+        #if stride > 1:
+        #    ans = lax.cond(
+        #        counter % stride,
+        #        lambda: jnp.zeros_like(ans),
+        #        lambda: ans,
+        #    )
         return counter + 1, ans
     return init, body_fn, [(0, axis, stride)], []
 
@@ -195,7 +196,8 @@ def scan_rule(
     if not set(scanvar_argnums) <= xs_argnums:
         raise ScanConversionError(
             "Global scan along an axis of a constant or carry in a call to "
-            "scan. This is not currently supported, but could be in future.")
+            "scan. This is not currently supported, but could be in future."
+        )
     #if set(scanvar_argnums) != xs_argnums:
     #    # TODO: Make this error more specific
     #    raise ScanConversionError(
@@ -215,6 +217,7 @@ def scan_rule(
         xs_avals[num_consts:num_consts + num_carry],
     )
     def body_fun(i_and_carry, *args):
+        #from IPython.terminal.debugger import set_trace; set_trace()
         i, old_carry = i_and_carry
         args = tuple(
             a if n in scanvar_argnums else
@@ -224,17 +227,17 @@ def scan_rule(
         new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
             consts + old_carry + args[num_consts + num_carry:]
         ))
-        ans = lax.cond(
-            i % stride,
-            lambda: [jnp.zeros_like(c) for c in new_carry_and_x],
-            lambda: new_carry_and_x,
+        #ans = lax.cond(
+        #    i % stride,
+        #    lambda: [jnp.zeros_like(c) for c in new_carry_and_x],
+        #    lambda: new_carry_and_x,
+        #)
+        carry = tree.map(
+            partial(lax.select, i % stride),
+            old_carry,
+            tuple(new_carry_and_x[:num_carry]),
         )
-        carry = lax.cond(
-            i % stride,
-            lambda: old_carry,
-            lambda: tuple(new_carry_and_x[:num_carry]),
-        )
-        return (i + 1, carry), ans
+        return (i + 1, carry), new_carry_and_x
 
     out_scanvars = zip(
         range(num_carry, len(jaxpr.out_avals)),
@@ -378,15 +381,15 @@ def conv_general_dilated_rule(
         carry_new = lax.slice_in_dim(
             lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
         )
-        out = lax.cond(
-            i % outscan_stride,
-            lambda: jnp.zeros_like(out),
-            lambda: out,
-        )
-        carry_new = lax.cond(
+        #out = lax.cond(
+        #    i % outscan_stride,
+        #    lambda: jnp.zeros_like(out),
+        #    lambda: out,
+        #)
+        carry_new = lax.select(
             i % (inscan_stride // lhs_dilation),
-            lambda: carry,
-            lambda: carry_new,
+            carry,
+            carry_new,
         )
         return (i + 1, carry_new), out
     return carry_init, body_fn, [(0, outscan_axis, outscan_stride)], []
@@ -496,11 +499,12 @@ def concatenate_rule(inscanvars, *operands, dimension):
             lax.concatenate_p.bind(*operands, dimension=dimension),
             axis,
         )
-        return i + 1, lax.cond(
-            i % instride,
-            lambda: jnp.zeros_like(ans),
-            lambda: ans,
-        )
+        #ans = lax.cond(
+        #    i % instride,
+        #    lambda: jnp.zeros_like(ans),
+        #    lambda: ans,
+        #)
+        return i + 1, ans
     return carry_init, body_fn, [(0, axis, instride)], []
 register_rule(lax.concatenate_p, concatenate_rule)
 
@@ -545,11 +549,12 @@ def dot_general_rule(
                 preferred_element_type=preferred_element_type,
                 out_sharding=out_sharding,
             ), out_axis)
-            return i + 1, lax.cond(
-                i % stride,
-                lambda: jnp.zeros_like(ans),
-                lambda: ans
-            )
+            #return i + 1, lax.cond(
+            #    i % stride,
+            #    lambda: jnp.zeros_like(ans),
+            #    lambda: ans
+            #)
+            return i + 1, ans
         return 0, body_fn, [(0, out_axis, stride)], []
     [argnum], [axis], [stride] = argnums, axes, strides
     if argnum == 0:  # Option (2)
@@ -577,11 +582,12 @@ def dot_general_rule(
                 preferred_element_type=preferred_element_type,
                 out_sharding=out_sharding,
             ), out_axis)
-            return i + 1, lax.cond(
-                i % stride,
-                lambda: jnp.zeros_like(ans),
-                lambda: ans
-            )
+            #return i + 1, lax.cond(
+            #    i % stride,
+            #    lambda: jnp.zeros_like(ans),
+            #    lambda: ans
+            #)
+            return i + 1, ans
     else:  # Option (2)
         assert argnum == 1
         if axis in rhs_contracting_axes:
@@ -608,11 +614,12 @@ def dot_general_rule(
                 preferred_element_type=preferred_element_type,
                 out_sharding=out_sharding,
             ), out_axis)
-            return i + 1, lax.cond(
-                i % stride,
-                lambda: jnp.zeros_like(ans),
-                lambda: ans
-            )
+            #return i + 1, lax.cond(
+            #    i % stride,
+            #    lambda: jnp.zeros_like(ans),
+            #    lambda: ans
+            #)
+            return i + 1, ans
     return 0, body_fn, [(0, out_axis, stride)], []
 register_rule(lax.dot_general_p, dot_general_rule)
 
