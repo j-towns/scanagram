@@ -4,9 +4,12 @@ import numpy as np
 from jax import numpy as jnp, lax
 from jax import tree
 from jax.extend.core import jaxpr_as_fun
+from jax.extend.core import primitives
+from jax._src.pjit import pjit_p
 from scanagram.util import safe_map, unzip3, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
+from scanagram import core
 
 map = safe_map
 zip = safe_zip
@@ -145,15 +148,15 @@ for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
 
 reduce_ops = [
-    lax.reduce_sum_p,
-    lax.reduce_prod_p,
+    lax.argmax_p,
+    lax.argmin_p,
+    lax.reduce_and_p,
     lax.reduce_max_p,
     lax.reduce_min_p,
     lax.reduce_or_p,
-    lax.reduce_and_p,
+    lax.reduce_prod_p,
+    lax.reduce_sum_p,
     lax.reduce_xor_p,
-    lax.argmax_p,
-    lax.argmin_p,
 ]
 def reduce_rule(op, inscanvars, xs_aval, axes):
     _, [inscan_axis], _ = unzip3(inscanvars)
@@ -623,3 +626,32 @@ def squeeze_rule(inscanvars, array, dimensions):
         raise ScanConversionError("Cannot squeeze scanned axis.")
     return batch_rule(lax.squeeze_p, inscanvars, array, dimensions=dimensions)
 register_rule(lax.squeeze_p, squeeze_rule)
+
+def call_rule(inscanvars, jaxpr, *args):
+    body_fns, scanvars, carry_init, outscanvars = core.make_carry_init(
+        jaxpr, inscanvars
+    )
+    def body_fn(carry, *args):
+        return core.body_fn(jaxpr, body_fns, scanvars, carry, args)
+    return carry_init, body_fn, outscanvars, []
+
+def pjit_rule(
+    inscanvars, *args, jaxpr, in_shardings, out_shardings, in_layouts,
+    out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
+    compiler_options_kvs,
+):
+    # TODO: Figure out how to handle (non-default cases of) all the params
+    return call_rule(inscanvars, jaxpr, *args)
+register_rule(pjit_p, pjit_rule)
+
+def custom_vjp_call_rule(inscanvars, *args, call_jaxpr, **_):
+    # TODO: Maybe warn the user of undefined behavour if you take the gradient
+    # of this?
+    return call_rule(inscanvars, call_jaxpr, *args)
+register_rule(primitives.custom_vjp_call_p, custom_vjp_call_rule)
+
+def custom_jvp_call_rule(inscanvars, *args, call_jaxpr, **_):
+    # TODO: Maybe warn the user of undefined behavour if you take the gradient
+    # of this?
+    return call_rule(inscanvars, call_jaxpr, *args)
+register_rule(primitives.custom_jvp_call_p, custom_jvp_call_rule)
