@@ -6,7 +6,7 @@ from jax import tree
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
 from jax._src.pjit import pjit_p
-from scanagram.util import safe_map, unzip3, unzip4, safe_zip, all_equal
+from scanagram.util import safe_map, unzip3, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
@@ -384,18 +384,32 @@ register_rule(lax.conv_general_dilated_p, conv_general_dilated_rule)
 def slice_rule(
    inscanvars, operand, start_indices, limit_indices, strides
 ):
-    [(_, in_axis, in_stride)] = inscanvars
-    if (limit_indices[in_axis] - start_indices[in_axis]
-            < operand.shape[in_axis]):
+    _, [in_axis], [in_stride], [prefill] = unzip_scanvars(inscanvars)
+    if not (start_indices[in_axis] in {0, np.shape(prefill)[in_axis]}
+            and limit_indices[in_axis] == operand.shape[in_axis]):
         raise ScanConversionError(
-            "Slice must be over the full scanned axis"
+            "Slice along the scanned axis can only be used to remove prefill."
         )
     if strides is not None and operand.shape[in_axis] % strides[in_axis]:
         # TODO: Consider relaxing this constraint
         raise ScanConversionError(
             "Strided slice along scan axis must have a stride which exactly "
-            "exactly divides the input axis size"
+            "exactly divides the input axis size."
         )
+    if strides is not None and prefill.shape[in_axis] % strides[in_axis]:
+        raise ScanConversionError(
+            "Strided slice along scan axis must have stride which exactly "
+            "divides the prefill axis size."
+        )
+    prefill_limit_indices = list(limit_indices)
+    prefill_limit_indices[in_axis] = min(
+        limit_indices[in_axis], prefill.shape[in_axis]
+    )
+    out_prefill = lax.slice_p.bind(
+        prefill, start_indices=start_indices,
+        limit_indices=tuple(prefill_limit_indices),
+        strides=strides
+    )
 
     start_indices_ = list(start_indices)
     start_indices_.pop(in_axis)
@@ -414,7 +428,8 @@ def slice_rule(
         )
 
     out_stride = in_stride * (strides[in_axis] if strides is not None else 1)
-    return None, body_fn, [(0, in_axis, in_stride * out_stride)], []
+    return None, body_fn, [(0, ScanInfo(in_axis, in_stride * out_stride,
+                                        out_prefill))], []
 register_rule(lax.slice_p, slice_rule)
 
 def pad_rule(
@@ -462,9 +477,18 @@ def concatenate_rule(inscanvars, *operands, dimension):
         )
     axis = axes[0]
     if axis == dimension:
-        raise ScanConversionError(
-            "Global scan along concatenation dimension is not supported"
-        )
+        if (len(operands) == 2 and tuple(argnums) == (1,)
+                and np.size(prefills[0]) == 0 and instrides[0] == 1):
+            out_prefill = operands[0]
+            def body_fn(carry, prefill_, x):
+                assert carry is None
+                return None, x
+            return None, body_fn, [(0, ScanInfo(axis, 1, out_prefill))], []
+        else:
+            raise ScanConversionError(
+                "Global scan along concatenation dimension is only supported "
+                "for setting up prefill."
+            )
     assert all_equal(instrides) # This should be guaranteed now, because the
                                 # shapes must match along axis
     instride = instrides[0]

@@ -368,7 +368,7 @@ def test_reduce_named_prefill(op, shape, axes, dtype):
     prefill = rng(shape, dtype)
     def fun(x):
         result = op(jnp.concatenate([prefill, x], 0), axes=axes)
-        return lax.slice_in_dim(result, len(prefill), len(x))
+        return lax.slice_in_dim(result, len(prefill), len(result))
     test_util.check_scan(fun, arg)
 
 def test_scan():
