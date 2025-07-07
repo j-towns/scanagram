@@ -340,6 +340,15 @@ def test_nary_strided2():
         return lax.pad(zs, 0., ((0, 1, 1), (0, 0, 0)))
     test_util.check_scan(f, xs)
 
+def test_nary_strided3():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3).astype("float32")
+    def f(xs):
+        ys = lax.slice_in_dim(xs, 0, 12, 2)
+        zs = lax.slice_in_dim(ys, 0, 6, 3)
+        return lax.pad(zs, 0., ((0, 5, 5), (0, 0, 0)))
+    test_util.check_scan(f, xs)
+
 @pytest.mark.parametrize(
     'op,shape,axes,dtype',
     [(rec.op, shape, axes, dtype)
