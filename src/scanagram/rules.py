@@ -391,7 +391,7 @@ def slice_rule(
         )
 
     out_stride = in_stride * (strides[in_axis] if strides is not None else 1)
-    return None, body_fn, [(0, in_axis, in_stride * out_stride)], []
+    return None, body_fn, [(0, in_axis, out_stride)], []
 register_rule(lax.slice_p, slice_rule)
 
 def pad_rule(
