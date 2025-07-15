@@ -10,27 +10,48 @@ from scanagram.util import safe_map, unzip2, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
+from scanagram.core import ScanInfo
 
 map = safe_map
 zip = safe_zip
 
 
-# Used when scanning along a batch dimension of op
+def unzip_scanvars(scanvars):
+    argnums = []
+    axes = []
+    prefills = []
+    for n, s in scanvars:
+        argnums.append(n)
+        axes.append(s.axis)
+        prefills.append(s.prefill)
+    return argnums, axes, prefills
+
+# Used when op is expressible as a (v)map over the scanned axis of all scanned
+# input variables
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
+    # These asserts should be enforced by the caller of this function
     assert not op.multiple_results
-    _, scanvar_axes = unzip2(inscanvars)
-    assert all_equal(scanvar_axes)
-    axis = scanvar_axes[0]
+    argnums, axes, prefills = unzip_scanvars(inscanvars)
+    assert all_equal(axes)
+    axis = axes[0], strides[0]
+    assert all_equal(p.shape[axis] for p in prefills)
+    prefill_len = prefills[0].shape[axis]
+    prefills_map = dict(zip(argnums, prefills))
+    out_prefill = op.bind(
+        *[prefills_map[n] if n in prefills_map
+          else a for n, a in enumerate(in_avals)], **bind_params
+    )
     carry_init = None
 
     def body_fn(carry, *args):
         assert carry is None
         args = list(args)
-        for argnum, axis in inscanvars:
+        for argnum, axis in zip(argnums, axes):
             args[argnum] = jnp.expand_dims(args[argnum], axis)
         ans = op.bind(*args, **bind_params)
         return None, lax.squeeze(ans, [axis])
-    return carry_init, body_fn, [(0, axis)], []
+    return carry_init, body_fn, [(0, ScanInfo(axis, out_prefill))], []
+
 
 nary_ops = [
     lax.abs_p,
@@ -110,7 +131,7 @@ nary_ops = [
 ]
 
 def nary_op_rule(op, inscanvars, *avals, **kwargs):
-    argnums, axes = unzip2(inscanvars)
+    argnums, axes, prefills = unzip_scanvars(inscanvars)
     axis = axes[0]
     if not all(a == axis for a in axes[1:]):
         # TODO: more detail
@@ -124,19 +145,31 @@ def nary_op_rule(op, inscanvars, *avals, **kwargs):
             "Broadcasting scanned variable along scanned axis is not "
             "supported"
         )
+    if not all_equal(p.shape[axis] for p in prefills):
+        raise ScanConversionError(
+            f"Different length prefills encountered in {op}"
+        )
     if all(a.ndim == 0 or a.shape[axis] == 1
            for i, a in enumerate(avals) if i not in argnums):
         return batch_rule(op, inscanvars, *avals, **kwargs)
+    prefill_len = prefills[0].shape[axis]
+    prefills_map = dict(zip(argnums, prefills))
+    out_prefill = op.bind(
+        *[prefills_map[n] if n in prefills_map
+          else lax.slice_in_dim(a, 0, prefill_len, axis=axis)
+          if a.shape[axis] > 1
+          else a for n, a in enumerate(avals)], **kwargs
+    )
     init = 0
     def body_fn(counter, *args):
         args = [
             a if i in argnums else lax.dynamic_index_in_dim(
-                a, counter, axis, False
+                a, prefill_len + counter, axis, False
             ) for i, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
         return counter + 1, ans
-    return init, body_fn, [(0, axis)], []
+    return init, body_fn, [(0, ScanInfo(axis, out_prefill))], []
 
 for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
@@ -153,7 +186,7 @@ reduce_ops = [
     lax.reduce_xor_p,
 ]
 def reduce_rule(op, inscanvars, xs_aval, axes):
-    _, [inscan_axis] = unzip2(inscanvars)
+    _, [inscan_axis], _ = unzip_scanvars(inscanvars)
     if inscan_axis in set(axes):
         raise ScanConversionError(
             "Global scan operating along reduce axis is not supported."
@@ -328,17 +361,27 @@ register_rule(lax.conv_general_dilated_p, conv_general_dilated_rule)
 def slice_rule(
    inscanvars, operand, start_indices, limit_indices, strides
 ):
-    [(_, in_axis)] = inscanvars
-    if (limit_indices[in_axis] - start_indices[in_axis]
-            < operand.shape[in_axis]):
+    _, [in_axis], [prefill] = unzip_scanvars(inscanvars)
+    if not (start_indices[in_axis] in {0, np.shape(prefill)[in_axis]}
+            and limit_indices[in_axis] == operand.shape[in_axis]):
         raise ScanConversionError(
-            "Slice must be over the full scanned axis"
+            "Slice along the scanned axis can only be used to remove prefill."
         )
     if strides is not None and strides[in_axis] != 1:
         # TODO: Consider relaxing this constraint
         raise ScanConversionError(
             "Strided slice along scan axis is not supported."
         )
+
+    prefill_limit_indices = list(limit_indices)
+    prefill_limit_indices[in_axis] = min(
+        limit_indices[in_axis], prefill.shape[in_axis]
+    )
+    out_prefill = lax.slice_p.bind(
+        prefill, start_indices=start_indices,
+        limit_indices=tuple(prefill_limit_indices),
+        strides=strides
+    )
 
     start_indices_ = list(start_indices)
     start_indices_.pop(in_axis)
@@ -356,7 +399,7 @@ def slice_rule(
             operand, start_indices_, limit_indices_, strides_
         )
 
-    return None, body_fn, [(0, in_axis)], []
+    return None, body_fn, [(0, ScanInfo(in_axis, out_prefill))], []
 register_rule(lax.slice_p, slice_rule)
 
 def pad_rule(

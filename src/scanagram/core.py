@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
@@ -15,6 +16,21 @@ rules = {}
 
 def register_rule(p: Primitive, rule):
     rules[p] = rule
+
+@dataclass
+class ScanInfo:
+    axis: int
+    prefill: Any
+
+def default_scan_info(aval):
+    assert aval.ndim
+    return ScanInfo(0, jnp.zeros((0,) + aval.shape[1:], aval.dtype))
+
+def typecheck_prefill(s: ScanInfo, aval):
+    assert s.prefill.shape[:s.axis] == aval.shape[:s.axis]
+    assert s.prefill.shape[s.axis] <= aval.shape[s.axis]
+    assert s.prefill.shape[s.axis + 1:] == aval.shape[s.axis + 1:]
+    assert s.prefill.dtype == aval.dtype
 
 ###############################################################################
 # This section is copied from jax/_src/core.py
@@ -101,11 +117,16 @@ def check_outvars(outvars, scanvars):
             "All of the outputs of the transformed function must be "
             "scanned over."
         )
-    if any(scanvars[o] != 0 for o in outvars):
+    if any(scanvars[o].axis != 0 for o in outvars):
         # TODO: ...and here.
         raise ScanConversionError(
             "All outputs of the transformed function must be scanned over "
             "axis 0."
+        )
+    if any(len(scanvars[o].prefill) > 0 for o in outvars):
+        # TODO: ...and here.
+        raise ScanConversionError(
+            "All outputs of the transformed function must not contain prefill."
         )
 
 def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
@@ -134,8 +155,10 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
     map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
-    inscanvars = inscanvars or [(n, 0) for n in range(len(jaxpr.invars))]
-    scanvars = {jaxpr.invars[n]: a for n, a in inscanvars}
+    inscanvars = [
+        (n, default_scan_info(v.aval)) for n, v in enumerate(jaxpr.invars)
+    ] if inscanvars is None else inscanvars
+    scanvars = {jaxpr.invars[n]: i for n, i in inscanvars}
     for e in jaxpr.eqns:
         inscanvars = [
             (i, scanvars[v]) for i, v in enumerate(e.invars)
@@ -150,6 +173,8 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
             scanvars.update((e.outvars[i], a) for i, a in outscanvars)
+            for i, s in outscanvars:
+                typecheck_prefill(s, e.outvars[i].aval)
             carry_init.append(init)
             eqn_body_fns.append(eqn_body_fn)
         elif not any(isinstance(v, AbstractValue) for v in in_vals):
