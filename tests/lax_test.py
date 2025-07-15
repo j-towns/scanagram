@@ -321,6 +321,24 @@ def test_nary_other_axis():
         return jnp.moveaxis(lax.add(jnp.moveaxis(xs, 0, 1), y), 1, 0)
     test_util.check_scan(f, xs)
 
+def test_nary_prefill():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3).astype("float32")
+    ys = rng.randn(15, 3).astype("float32")
+    prefill = rng.randn(3, 3).astype("float32")
+    def f(xs):
+        return (ys * jnp.concatenate([prefill, xs]))[3:]
+    test_util.check_scan(f, xs)
+
+def test_nary_prefill_batch():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3).astype("float32")
+    ys = rng.randn(1, 3).astype("float32")
+    prefill = rng.randn(3, 3).astype("float32")
+    def f(xs):
+        return (ys * jnp.concatenate([prefill, xs]))[3:]
+    test_util.check_scan(f, xs)
+
 @pytest.mark.parametrize(
     'op,shape,axes,dtype',
     [(rec.op, shape, axes, dtype)
@@ -333,6 +351,40 @@ def test_reduce_named(op, shape, axes, dtype):
     rng = rng_factory(np.random)
     arg = rng(shape, dtype)
     fun = functools.partial(op, axes=axes)
+    test_util.check_scan(fun, arg)
+
+@pytest.mark.parametrize(
+    'op,shape,axes,dtype',
+    [(rec.op, shape, axes, dtype)
+     for rec in lax_named_reduce_ops()[:1]
+     for (shape, axes) in [[(3, 4, 5), (1,)], [(3, 4, 5), (1, 2)]]
+     for dtype in rec.dtypes])
+def test_reduce_named_prefill(op, shape, axes, dtype):
+    rng_factory = (jtu.rand_default if dtypes.issubdtype(dtype, np.integer)
+                   else jtu.rand_small)
+    rng = rng_factory(np.random)
+    arg = rng(shape, dtype)
+    prefill = rng(shape, dtype)
+    def fun(x):
+        result = op(jnp.concatenate([prefill, x], 0), axes=axes)
+        return lax.slice_in_dim(result, len(prefill), len(result))
+    test_util.check_scan(fun, arg)
+
+@pytest.mark.parametrize(
+    'op,shape,axes,dtype',
+    [(rec.op, shape, axes, dtype)
+     for rec in lax_named_reduce_ops()[:1]
+     for (shape, axes) in [[(3, 4, 5), (1,)], [(3, 4, 5), (1, 2)]]
+     for dtype in rec.dtypes])
+def test_reduce_named_prefill_pyslice(op, shape, axes, dtype):
+    rng_factory = (jtu.rand_default if dtypes.issubdtype(dtype, np.integer)
+                   else jtu.rand_small)
+    rng = rng_factory(np.random)
+    arg = rng(shape, dtype)
+    prefill = rng(shape, dtype)
+    def fun(x):
+        result = op(jnp.concatenate([prefill, x], 0), axes=axes)
+        return result[len(prefill):]
     test_util.check_scan(fun, arg)
 
 def test_scan():

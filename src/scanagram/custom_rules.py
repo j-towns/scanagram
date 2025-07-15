@@ -1,3 +1,4 @@
+from typing import Any
 from dataclasses import dataclass
 import functools
 from typing import Callable
@@ -12,9 +13,11 @@ from jax import ShapeDtypeStruct
 from jax import jvp
 from jax.extend.linear_util import wrap_init
 from jax.api_util import debug_info
+import jax.numpy as jnp
 
 from scanagram import util
 from scanagram.core import ScanConversionError, register_rule
+from scanagram import core
 
 
 map, unsafe_map = util.safe_map, map
@@ -87,11 +90,12 @@ class custom_scanagram:
 @dataclass
 class ScanInfo:
     axis: int
+    prefill: Any = None
 
 def custom_scanagram_rule(
     inscanvars, *args_flat, call, rule, in_tree, out_tree
 ):
-    argnums, axes = util.unzip2(inscanvars)
+    argnums, axes, prefills_flat = util.unzip_scanvars(inscanvars)
     args_flat = [ShapeDtypeStruct(a.shape, a.dtype) for a in args_flat]
     consts, arg = tree.unflatten(in_tree, args_flat)
     if not (set(argnums)
@@ -110,7 +114,14 @@ def custom_scanagram_rule(
             "All input arrays to custom_scanagram-decorated function must be "
             "scanned along the same axis."
         )
-    InVarInfo = ScanInfo(axes[0])
+    axis = axes[0]
+    assert util.all_equal(p.shape[axis] for p in prefills_flat)
+    prefill_len = prefills_flat[0].shape[axis]
+    if prefill_len == 0:
+        prefills = None
+    else:
+        _, prefills = tree.unflatten(in_tree, prefills_flat)
+    InVarInfo = ScanInfo(axes[0], prefills)
     out_info, body_fn, carry_init = rule(InVarInfo, arg)
     def body_fn_flat(carry, *args_flat):
         _, arg = tree.unflatten(in_tree, args_flat)
@@ -121,8 +132,29 @@ def custom_scanagram_rule(
                 "have the same pytree structure as the output of the "
                 "custom_scanagram-decorated function."
             )
+        # TODO: more detailed type checking here
         return carry_new, tree.leaves(out)
-    out_info = [(n, out_info.axis) for n in range(out_tree.num_leaves)]
+    if out_info.prefill is None:
+        out_prefill_shapes = map(list, (a.shape for a in call.out_avals))
+        for i in range(len(out_prefill_shapes)):
+            out_prefill_shapes[i][axis] = 0
+        out_info = [
+            (n, core.ScanInfo(out_info.axis, jnp.zeros(s, a.dtype)))
+            for n, (s, a) in enumerate(zip(out_prefill_shapes, call.out_avals))
+        ]
+    else:
+        if not tree.structure(out_info.prefill) == out_tree:
+            raise ScanConversionError(
+                "Output prefill from custom_scanagram rule must have same "
+                "pytree structure as the output of the "
+                "custom_scanagram-decorated function."
+            )
+        # TODO: more detailed type checking here
+        out_prefill_flat, _ = tree.flatten(out_info.prefill)
+        out_info = [
+            (n, core.ScanInfo(out_info.axis, p)) for n, p in
+            enumerate(out_prefill_fat)
+        ]
     return carry_init, body_fn_flat, out_info, []
 
 def custom_scanagram_impl(*args, call, rule, in_tree, out_tree):

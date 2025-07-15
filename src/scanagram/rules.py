@@ -6,7 +6,9 @@ from jax import tree
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
 from jax._src.pjit import pjit_p
-from scanagram.util import safe_map, unzip2, safe_zip, all_equal
+from scanagram.util import (
+    safe_map, unzip2, safe_zip, all_equal, unzip_scanvars
+)
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
@@ -16,16 +18,6 @@ map = safe_map
 zip = safe_zip
 
 
-def unzip_scanvars(scanvars):
-    argnums = []
-    axes = []
-    prefills = []
-    for n, s in scanvars:
-        argnums.append(n)
-        axes.append(s.axis)
-        prefills.append(s.prefill)
-    return argnums, axes, prefills
-
 # Used when op is expressible as a (v)map over the scanned axis of all scanned
 # input variables
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
@@ -33,7 +25,7 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
     assert not op.multiple_results
     argnums, axes, prefills = unzip_scanvars(inscanvars)
     assert all_equal(axes)
-    axis = axes[0], strides[0]
+    axis = axes[0]
     assert all_equal(p.shape[axis] for p in prefills)
     prefill_len = prefills[0].shape[axis]
     prefills_map = dict(zip(argnums, prefills))
@@ -269,8 +261,9 @@ def _perm_inverse(p):
     return s
 
 def transpose_rule(inscanvars, operand, permutation):
-    [(argnum, in_axis)] = inscanvars
+    [argnum], [in_axis], [prefill] = unzip_scanvars(inscanvars)
     assert argnum == 0
+    out_prefill = lax.transpose_p.bind(prefill, permutation=permutation)
     out_axis = _perm_inverse(permutation)[in_axis]
     def body_fn(carry, x):
         return None, lax.squeeze(
@@ -278,7 +271,7 @@ def transpose_rule(inscanvars, operand, permutation):
                 jnp.expand_dims(x, in_axis), permutation
             ), [out_axis]
         )
-    return None, body_fn, [(0, out_axis)], []
+    return None, body_fn, [(0, ScanInfo(out_axis, out_prefill))], []
 register_rule(lax.transpose_p, transpose_rule)
 
 def conv_general_dilated_rule(
@@ -406,7 +399,7 @@ def pad_rule(
     inscanvars, operand, padding_value, padding_config
 ):
     assert len(inscanvars) == 1
-    [(argnum, axis)] = inscanvars
+    [argnum], [axis], [prefill] = unzip_scanvars(inscanvars)
     assert argnum == 0  # Shouldn't be possible to scan over scalar
                         # padding_value
     scan_pad_start, scan_pad_end, scan_pad_interior = padding_config[axis]
@@ -414,15 +407,19 @@ def pad_rule(
         raise ScanConversionError(
             "Padding along scanned axis is not currently supported."
         )
+    out_prefill = (
+        lax.pad_p.bind(prefill, padding_value, padding_config)
+        if prefill.shape[axis] > 0 else prefill
+    )
     padding_config_ = list(padding_config)
     padding_config_.pop(axis)
     def body_fn(i, operand, padding_value):
         return i + 1, lax.pad(operand, padding_value, padding_config_)
-    return 0, body_fn, [(0, axis)], []
+    return 0, body_fn, [(0, ScanInfo(axis, out_prefill))], []
 register_rule(lax.pad_p, pad_rule)
 
 def concatenate_rule(inscanvars, *operands, dimension):
-    argnums, axes = unzip2(inscanvars)
+    argnums, axes, prefills = unzip_scanvars(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
             "All scanned arguments to concatenate must be scanned along the "
@@ -430,9 +427,18 @@ def concatenate_rule(inscanvars, *operands, dimension):
         )
     axis = axes[0]
     if axis == dimension:
-        raise ScanConversionError(
-            "Global scan along concatenation dimension is not supported"
-        )
+        if (len(operands) == 2 and tuple(argnums) == (1,)
+                and np.size(prefills[0]) == 0):
+            out_prefill = operands[0]
+            def body_fn(carry, prefill_, x):
+                assert carry is None
+                return None, x
+            return None, body_fn, [(0, ScanInfo(axis, out_prefill))], []
+        else:
+            raise ScanConversionError(
+                "Global scan along concatenation dimension is only supported "
+                "for setting up prefill."
+            )
     carry_init = 0
     def body_fn(i, *operands):
         operands = [

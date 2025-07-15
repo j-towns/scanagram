@@ -6,6 +6,7 @@ from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
 from jax.core import Atom, AbstractValue
+import jax.numpy as jnp
 
 from scanagram.util import safe_map
 

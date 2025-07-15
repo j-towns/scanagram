@@ -49,8 +49,19 @@ def safe_zip(*args):
 ###############################################################################
 
 def all_equal(xs):
+    xs = list(xs)
     if len(xs) == 0:
         return True
     else:
         x, *xs = xs
         return all(y == x for y in xs)
+
+def unzip_scanvars(scanvars):
+    argnums = []
+    axes = []
+    prefills = []
+    for n, s in scanvars:
+        argnums.append(n)
+        axes.append(s.axis)
+        prefills.append(s.prefill)
+    return argnums, axes, prefills
