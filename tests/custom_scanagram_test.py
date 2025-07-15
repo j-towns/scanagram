@@ -31,7 +31,7 @@ def test_custom_scanagram():
         carry_init = 0
         def body_fn(c, x):
             return c + x, c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -60,7 +60,7 @@ def test_custom_scanagram_consts():
         carry_init = 0
         def body_fn(c, x):
             return c + x, 5 + c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -93,7 +93,7 @@ def test_custom_scanagram_in_pytree():
         def body_fn(c, x):
             x = x['xs']
             return c + x, c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -121,7 +121,7 @@ def test_custom_scanagram_out_pytree():
         carry_init = 0
         def body_fn(c, x):
             return c + x, {'ys': c + x}
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -149,7 +149,7 @@ def test_custom_scanagram_jit():
         carry_init = 0
         def body_fn(c, x):
             return c + x, c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     f = jit(f)
     jax_test_util.check_close(f_ref(xs), f(xs))
@@ -182,7 +182,7 @@ def test_custom_scanagram_jvp():
         def body_fn(c, x):
             x = x ** 2
             return c + x, c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     jax_test_util.check_close(
@@ -243,7 +243,7 @@ def test_custom_scanagram_grad():
         def body_fn(c, x):
             x = x ** 2
             return c + x, c + x
-        return ScanInfo(0, 1), body_fn, carry_init
+        return ScanInfo(0), body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     jax_test_util.check_close(

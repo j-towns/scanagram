@@ -101,19 +101,12 @@ def check_outvars(outvars, scanvars):
             "All of the outputs of the transformed function must be "
             "scanned over."
         )
-    if any(scanvars[o][0] != 0 for o in outvars):
+    if any(scanvars[o] != 0 for o in outvars):
         # TODO: ...and here.
         raise ScanConversionError(
             "All outputs of the transformed function must be scanned over "
             "axis 0."
         )
-    if any(scanvars[o][1] != 1 for o in outvars):
-        # TODO: ...and here.
-        raise ScanConversionError(
-            "All outputs of the transformed function must not be "
-            "strided/scaled along the scanned axis."
-        )
-
 
 def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
     top_level = inscanvars is None
@@ -141,11 +134,11 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
     map(write, jaxpr.constvars, closed_jaxpr.consts)
 
     # Map from Var to scan axis
-    inscanvars = inscanvars or [(n, 0, 1) for n in range(len(jaxpr.invars))]
-    scanvars = {jaxpr.invars[n]: (a, s) for n, a, s in inscanvars}
+    inscanvars = inscanvars or [(n, 0) for n in range(len(jaxpr.invars))]
+    scanvars = {jaxpr.invars[n]: a for n, a in inscanvars}
     for e in jaxpr.eqns:
         inscanvars = [
-            (i, *scanvars[v]) for i, v in enumerate(e.invars)
+            (i, scanvars[v]) for i, v in enumerate(e.invars)
             if type(v) is Var and v in scanvars
         ]
         in_vals = map(maybe_read, e.invars)
@@ -156,7 +149,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
-            scanvars.update((e.outvars[i], (a, s)) for i, a, s in outscanvars)
+            scanvars.update((e.outvars[i], a) for i, a in outscanvars)
             carry_init.append(init)
             eqn_body_fns.append(eqn_body_fn)
         elif not any(isinstance(v, AbstractValue) for v in in_vals):
@@ -172,7 +165,7 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
         return eqn_body_fns, set(scanvars), carry_init
     else:
         outscanvars = tuple(
-            (i,) + scanvars[v] for i, v in enumerate(jaxpr.outvars)
+            (i, scanvars[v]) for i, v in enumerate(jaxpr.outvars)
         )
         return eqn_body_fns, set(scanvars), carry_init, outscanvars
 

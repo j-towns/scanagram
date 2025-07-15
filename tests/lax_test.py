@@ -321,34 +321,6 @@ def test_nary_other_axis():
         return jnp.moveaxis(lax.add(jnp.moveaxis(xs, 0, 1), y), 1, 0)
     test_util.check_scan(f, xs)
 
-def test_nary_strided():
-    rng = np.random.RandomState(0)
-    xs = rng.randn(12, 3).astype("float32")
-    def f(xs):
-        ys = lax.slice_in_dim(xs, 0, 12, 2)
-        zs = 2 * ys
-        return lax.pad(zs, 0., ((0, 1, 1), (0, 0, 0)))
-    test_util.check_scan(f, xs)
-
-def test_nary_strided2():
-    rng = np.random.RandomState(0)
-    xs = rng.randn(12, 3).astype("float32")
-    bs = rng.randn(6, 3).astype("float32")
-    def f(xs):
-        ys = lax.slice_in_dim(xs, 0, 12, 2)
-        zs = bs * ys
-        return lax.pad(zs, 0., ((0, 1, 1), (0, 0, 0)))
-    test_util.check_scan(f, xs)
-
-def test_nary_strided3():
-    rng = np.random.RandomState(0)
-    xs = rng.randn(12, 3).astype("float32")
-    def f(xs):
-        ys = lax.slice_in_dim(xs, 0, 12, 2)
-        zs = lax.slice_in_dim(ys, 0, 6, 3)
-        return lax.pad(zs, 0., ((0, 5, 5), (0, 0, 0)))
-    test_util.check_scan(f, xs)
-
 @pytest.mark.parametrize(
     'op,shape,axes,dtype',
     [(rec.op, shape, axes, dtype)
@@ -374,18 +346,6 @@ def test_scan():
     xs = rng.randn(5, 2).astype("float32")
     test_util.check_scan(f, xs)
 
-def test_scan_strided():
-    rng = np.random.RandomState(0)
-    init_carry = np.zeros(2, "float32")
-    def f(xs):
-        ys = lax.slice_in_dim(xs, 0, 6, 2)
-        carry_out, zs = lax.scan(
-            lambda carry, x: (carry + x, carry + x), init_carry, ys
-        )
-        return lax.pad(zs, 0., [(0, 1, 1), (0, 0, 0)])
-    xs = rng.randn(6, 2).astype("float32")
-    test_util.check_scan(f, xs)
-
 def test_scan_some_inputs():
     rng = np.random.RandomState(0)
     init_carry = np.zeros(2, "float32")
@@ -400,22 +360,6 @@ def test_scan_some_inputs():
         _, out = lax.scan(body_fn, init_carry, (xs, ys))
         return out
     test_util.check_scan(f, xs)
-
-def test_scan_some_inputs_strided():
-    rng = np.random.RandomState(0)
-    init_carry = np.zeros(2, "float32")
-    xs_unstrided = rng.randn(6, 2).astype("float32")
-    ys = rng.randn(3, 2).astype("float32")
-
-    def body_fn(carry, x_and_y):
-        x, y = x_and_y
-        return carry + x, carry + y + x
-
-    def f(xs_unstrided):
-        xs = lax.slice_in_dim(xs_unstrided, 0, 6, 2)
-        _, out = lax.scan(body_fn, init_carry, (xs, ys))
-        return lax.pad(out, 0., ((0, 1, 1), (0, 0, 0)))
-    test_util.check_scan(f, xs_unstrided)
 
 def test_transpose():
     rng = np.random.RandomState(0)
@@ -495,91 +439,6 @@ def test_conv_rhs_dilation():
         )
     test_util.check_scan(f, lhs)
 
-def test_conv_in_stride():
-    window_size = 3
-    in_stride = 2
-    rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5).astype("float32")
-    rhs = rng.randn(window_size, 5, 6).astype("float32")
-    def f(x):
-        y = lax.slice_in_dim(x, 0, 12, in_stride)
-        z = lax.conv_general_dilated(
-            y, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
-            dimension_numbers=("TNC", "TIO", "TNC"),
-        )
-        return lax.pad(z, 0., [(0, in_stride - 1, in_stride - 1),
-                               (0, 0, 0), (0, 0, 0)])
-    test_util.check_scan(f, x)
-
-def test_conv_window_stride():
-    window_size = 2
-    window_stride = 3
-    rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5).astype("float32")
-    rhs = rng.randn(window_size, 5, 6).astype("float32")
-    def f(x):
-        y = lax.conv_general_dilated(
-            x, rhs, window_strides=[window_stride],
-            padding=[(window_size - 1, 0)],
-            dimension_numbers=("TNC", "TIO", "TNC"),
-        )
-        return lax.pad(y, 0., [(0, window_stride - 1, window_stride - 1),
-                               (0, 0, 0), (0, 0, 0)])
-    test_util.check_scan(f, x)
-
-def test_conv_in_stride_window_stride():
-    window_size = 5
-    in_stride = 2
-    window_stride = 3
-    rng = np.random.RandomState(0)
-    x = rng.randn(12, 4, 5).astype("float32")
-    rhs = rng.randn(window_size, 5, 6).astype("float32")
-    def f(x):
-        y = lax.slice_in_dim(x, 0, 12, in_stride)
-        z = lax.conv_general_dilated(
-            y, rhs, window_strides=[window_stride],
-            padding=[(window_size - 1, 0)],
-            dimension_numbers=("TNC", "TIO", "TNC"),
-        )
-        return lax.pad(z, 0., [
-            (0, in_stride * window_stride - 1, in_stride * window_stride - 1),
-            (0, 0, 0), (0, 0, 0)
-        ])
-    test_util.check_scan(f, x)
-
-def test_conv_lhs_dilation():
-    window_size = 5
-    lhs_dilation = 3
-    rng = np.random.RandomState(0)
-    lhs = rng.randn(12, 4, 5).astype("float32")
-    rhs = rng.randn(window_size, 5, 6).astype("float32")
-    def f(x):
-        y = lax.slice_in_dim(x, 0, 12, 3)
-        return lax.conv_general_dilated(
-            y, rhs, window_strides=[1], padding=[((window_size - 1),
-                                                  lhs_dilation - 1)],
-            lhs_dilation=(lhs_dilation,),
-            dimension_numbers=("TNC", "TIO", "TNC"),
-        )
-    test_util.check_scan(f, lhs)
-
-def test_conv_window_stride_lhs_dilation():
-    window_size = 2
-    lhs_dilation = 3
-    rng = np.random.RandomState(0)
-    lhs = rng.randn(12, 4, 5).astype("float32")
-    rhs = rng.randn(window_size, 5, 6)
-    def f(x):
-        y = lax.slice_in_dim(x, 0, 12, 3)
-        z = lax.conv_general_dilated(
-            y, rhs, window_strides=[2], padding=[((window_size - 1),
-                                                  lhs_dilation - 1)],
-            lhs_dilation=(lhs_dilation,),
-            dimension_numbers=("TNC", "TIO", "TNC"),
-        )
-        return lax.pad(z, 0., [(0, 1, 1), (0, 0, 0), (0, 0, 0)])
-    test_util.check_scan(f, lhs)
-
 def test_conv_transposed():
     window_size = 2
     rng = np.random.RandomState(0)
@@ -614,30 +473,11 @@ def test_pad():
         return lax.pad(operand, 3., [(0, 0, 0), (1, 2, 3)])
     test_util.check_scan(f, operand)
 
-def tests_slice_then_pad():
-    rng = np.random.RandomState(0)
-    operand = rng.randn(6, 4).astype("float32")
-    def f(operand):
-        sliced = lax.slice(operand, (0, 0), (6, 4), (2, 1))
-        return lax.pad(sliced, 3., [(0, 1, 1), (0, 0, 0)])
-    test_util.check_scan(f, operand)
-
 def test_concatenate():
     rng = np.random.RandomState(0)
     x, y = rng.randn(6, 4).astype("float32"), rng.randn(6, 3).astype("float32")
     def f(x):
         return lax.concatenate([x, y], 1)
-    test_util.check_scan(f, x)
-
-def test_concatenate_strided():
-    rng = np.random.RandomState(0)
-    x, y = rng.randn(6, 4).astype("float32"), rng.randn(3, 3).astype("float32")
-    def f(x):
-        return lax.pad(
-            lax.concatenate([lax.slice_in_dim(x, 0, 6, 2), y], 1),
-            0.,
-            ((0, 1, 1), (0, 0, 0)),
-        )
     test_util.check_scan(f, x)
 
 def test_concatenate_both_scanned():
@@ -669,18 +509,6 @@ def test_dot_general_lhs_batch():
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
     test_util.check_scan(f, x)
 
-def test_dot_general_lhs_batch_strided():
-    rng = np.random.RandomState(0)
-    x, y = (
-        rng.randn(6, 4, 3).astype("float32"),
-        rng.randn(3, 3, 4).astype("float32")
-    )
-    def f(x):
-        x = lax.slice_in_dim(x, 0, 6, 2)
-        z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
-        return lax.pad(z, 0., ((0, 1, 1), (0, 0, 0), (0, 0, 0)))
-    test_util.check_scan(f, x)
-
 def test_dot_general_lhs_non_batch():
     rng = np.random.RandomState(0)
     x, y = (
@@ -701,18 +529,6 @@ def test_dot_general_rhs_batch():
     )
     def f(y):
         return lax.dot_general(x, y, (([1], [2]), ([0], [0])))
-    test_util.check_scan(f, y)
-
-def test_dot_general_rhs_batch_strided():
-    rng = np.random.RandomState(0)
-    x, y = (
-        rng.randn(3, 4, 3).astype("float32"),
-        rng.randn(6, 3, 4).astype("float32")
-    )
-    def f(y):
-        y = lax.slice_in_dim(y, 0, 6, 2)
-        z = lax.dot_general(x, y, (([1], [2]), ([0], [0])))
-        return lax.pad(z, 0., ((0, 1, 1), (0, 0, 0), (0, 0, 0)))
     test_util.check_scan(f, y)
 
 def test_dot_general_rhs_non_batch():

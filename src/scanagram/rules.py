@@ -6,7 +6,7 @@ from jax import tree
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
 from jax._src.pjit import pjit_p
-from scanagram.util import safe_map, unzip3, safe_zip, all_equal
+from scanagram.util import safe_map, unzip2, safe_zip, all_equal
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
@@ -18,20 +18,19 @@ zip = safe_zip
 # Used when scanning along a batch dimension of op
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
     assert not op.multiple_results
-    _, scanvar_axes, strides = unzip3(inscanvars)
+    _, scanvar_axes = unzip2(inscanvars)
     assert all_equal(scanvar_axes)
-    assert all_equal(strides)
-    axis, stride = scanvar_axes[0], strides[0]
+    axis = scanvar_axes[0]
     carry_init = None
 
     def body_fn(carry, *args):
         assert carry is None
         args = list(args)
-        for argnum, axis, _ in inscanvars:
+        for argnum, axis in inscanvars:
             args[argnum] = jnp.expand_dims(args[argnum], axis)
         ans = op.bind(*args, **bind_params)
         return None, lax.squeeze(ans, [axis])
-    return carry_init, body_fn, [(0, axis, stride)], []
+    return carry_init, body_fn, [(0, axis)], []
 
 nary_ops = [
     lax.abs_p,
@@ -111,17 +110,12 @@ nary_ops = [
 ]
 
 def nary_op_rule(op, inscanvars, *avals, **kwargs):
-    argnums, axes, strides = unzip3(inscanvars)
+    argnums, axes = unzip2(inscanvars)
     axis = axes[0]
-    stride = strides[0]
     if not all(a == axis for a in axes[1:]):
         # TODO: more detail
         raise ScanConversionError(
             "All scanned inputs to nary op must be scanned along same axis"
-        )
-    if not all(s == stride for s in strides):
-        raise ScanConversionError(
-            "All scanned inputs to nary op must have same stride/scale"
         )
     if (any(avals[n].shape[axis] == 1 for n in argnums)
             and any(a.shape[axis] > 1 for a in avals)):
@@ -137,12 +131,12 @@ def nary_op_rule(op, inscanvars, *avals, **kwargs):
     def body_fn(counter, *args):
         args = [
             a if i in argnums else lax.dynamic_index_in_dim(
-                a, counter // stride, axis, False
+                a, counter, axis, False
             ) for i, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
         return counter + 1, ans
-    return init, body_fn, [(0, axis, stride)], []
+    return init, body_fn, [(0, axis)], []
 
 for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
@@ -159,7 +153,7 @@ reduce_ops = [
     lax.reduce_xor_p,
 ]
 def reduce_rule(op, inscanvars, xs_aval, axes):
-    _, [inscan_axis], _ = unzip3(inscanvars)
+    _, [inscan_axis] = unzip2(inscanvars)
     if inscan_axis in set(axes):
         raise ScanConversionError(
             "Global scan operating along reduce axis is not supported."
@@ -172,7 +166,7 @@ def scan_rule(
     inscanvars, *xs_avals, _split_transpose, jaxpr, length, linear, num_carry,
     num_consts, reverse, unroll
 ):
-    scanvar_argnums, scanvar_axes, scanvar_strides = unzip3(inscanvars)
+    scanvar_argnums, scanvar_axes = unzip2(inscanvars)
     xs_argnums = set(range(num_consts + num_carry, len(xs_avals)))
     if not set(scanvar_argnums) <= xs_argnums:
         raise ScanConversionError(
@@ -184,9 +178,6 @@ def scan_rule(
         raise ScanConversionError(
             "Mismatch between global scan axis and scan axis"
         )
-    if not all_equal(scanvar_strides):
-        raise ScanConversionError("Scan input strides must match.")
-    stride = scanvar_strides[0]
     consts, carry = (
         xs_avals[:num_consts],
         xs_avals[num_consts:num_consts + num_carry],
@@ -195,23 +186,18 @@ def scan_rule(
         i, old_carry = i_and_carry
         args = tuple(
             a if n in scanvar_argnums else
-            lax.dynamic_index_in_dim(a, i // stride, keepdims=False)
+            lax.dynamic_index_in_dim(a, i, keepdims=False)
             for n, a in enumerate(args)
         )
         new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
             consts + old_carry + args[num_consts + num_carry:]
         ))
-        carry = tree.map(
-            partial(lax.select, i % stride),
-            old_carry,
-            tuple(new_carry_and_x[:num_carry]),
-        )
+        carry = tuple(new_carry_and_x[:num_carry])
         return (i + 1, carry), new_carry_and_x
 
     out_scanvars = zip(
         range(num_carry, len(jaxpr.out_avals)),
         repeat(0, len(jaxpr.out_avals) - num_carry),
-        repeat(stride, len(jaxpr.out_avals) - num_carry),
     )
     out_to_delete = list(range(num_carry))
     return (0, carry), body_fun, out_scanvars, out_to_delete
@@ -220,7 +206,7 @@ register_rule(lax.scan_p, scan_rule)
 def broadcast_in_dim_rule(
     inscanvars, operand, shape, broadcast_dimensions, sharding
 ):
-    [(_, inscan_axis, stride)] = inscanvars
+    [(_, inscan_axis)] = inscanvars
     if sharding is not None:
         raise ScanConversionError(
             "Sharding in broadcast_in_dim not yet supported."
@@ -240,7 +226,7 @@ def broadcast_in_dim_rule(
                 jnp.expand_dims(x, inscan_axis), shape=shape,
                 broadcast_dimensions=broadcast_dimensions, sharding=sharding
             ), out_axis)
-    return None, body_fn, [(0, out_axis, stride)], []
+    return None, body_fn, [(0, out_axis)], []
 register_rule(lax.broadcast_in_dim_p, broadcast_in_dim_rule)
 
 def _perm_inverse(p):
@@ -250,7 +236,7 @@ def _perm_inverse(p):
     return s
 
 def transpose_rule(inscanvars, operand, permutation):
-    [(argnum, in_axis, in_stride)] = inscanvars
+    [(argnum, in_axis)] = inscanvars
     assert argnum == 0
     out_axis = _perm_inverse(permutation)[in_axis]
     def body_fn(carry, x):
@@ -259,7 +245,7 @@ def transpose_rule(inscanvars, operand, permutation):
                 jnp.expand_dims(x, in_axis), permutation
             ), [out_axis]
         )
-    return None, body_fn, [(0, out_axis, in_stride)], []
+    return None, body_fn, [(0, out_axis)], []
 register_rule(lax.transpose_p, transpose_rule)
 
 def conv_general_dilated_rule(
@@ -267,7 +253,7 @@ def conv_general_dilated_rule(
     dimension_numbers, feature_group_count, batch_group_count, precision,
     preferred_element_type
 ):
-    inscan_argnums, inscan_axes, inscan_strides = unzip3(inscanvars)
+    inscan_argnums, inscan_axes = unzip2(inscanvars)
     if 1 in inscan_argnums:
         raise ScanConversionError(
             "Global scan is not currently supported over rhs of "
@@ -289,7 +275,6 @@ def conv_general_dilated_rule(
             batch_group_count=batch_group_count, precision=precision,
             preferred_element_type=preferred_element_type
         )
-    [inscan_stride] = inscan_strides
     if lhs.ndim > 3:
         raise ScanConversionError(
             "Converting conv with spatial dimension > 1 not yet supported."
@@ -316,26 +301,13 @@ def conv_general_dilated_rule(
             "Output scanned axis size of strided conv must exactly divide "
             "input scanned axis size."
         )
-    if inscan_stride % lhs_dilation:
-        raise ScanConversionError(
-            "Conv lhs_dilation must exactly divide input stride along scanned "
-            "axis."
-        )
-    outscan_stride = (inscan_stride * window_stride) // lhs_dilation
     carry_shape = list(lhs.shape)
     carry_shape[inscan_axis] = rhs_dilation * (window_size - 1)
     carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
     def body_fn(i_and_carry, x, rhs):
         i, carry = i_and_carry
         lhs = lax.concatenate(
-            [
-                carry,
-                jnp.expand_dims(lax.select(
-                    i % inscan_stride,
-                    jnp.zeros_like(x),
-                    x,
-                ), inscan_axis)
-            ], inscan_axis
+            [carry, jnp.expand_dims(x, inscan_axis)], inscan_axis
         )
         out = lax.conv_general_dilated_p.bind(
             lhs, rhs, window_strides=(1,), padding=((0, 0),),
@@ -349,29 +321,23 @@ def conv_general_dilated_rule(
         carry_new = lax.slice_in_dim(
             lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
         )
-        carry_new = lax.select(
-            i % (inscan_stride // lhs_dilation),
-            carry,
-            carry_new,
-        )
         return (i + 1, carry_new), out
-    return carry_init, body_fn, [(0, outscan_axis, outscan_stride)], []
+    return carry_init, body_fn, [(0, outscan_axis)], []
 register_rule(lax.conv_general_dilated_p, conv_general_dilated_rule)
 
 def slice_rule(
    inscanvars, operand, start_indices, limit_indices, strides
 ):
-    [(_, in_axis, in_stride)] = inscanvars
+    [(_, in_axis)] = inscanvars
     if (limit_indices[in_axis] - start_indices[in_axis]
             < operand.shape[in_axis]):
         raise ScanConversionError(
             "Slice must be over the full scanned axis"
         )
-    if strides is not None and operand.shape[in_axis] % strides[in_axis]:
+    if strides is not None and strides[in_axis] != 1:
         # TODO: Consider relaxing this constraint
         raise ScanConversionError(
-            "Strided slice along scan axis must have a stride which exactly "
-            "exactly divides the input axis size"
+            "Strided slice along scan axis is not supported."
         )
 
     start_indices_ = list(start_indices)
@@ -390,48 +356,30 @@ def slice_rule(
             operand, start_indices_, limit_indices_, strides_
         )
 
-    out_stride = in_stride * (strides[in_axis] if strides is not None else 1)
-    return None, body_fn, [(0, in_axis, out_stride)], []
+    return None, body_fn, [(0, in_axis)], []
 register_rule(lax.slice_p, slice_rule)
 
 def pad_rule(
     inscanvars, operand, padding_value, padding_config
 ):
     assert len(inscanvars) == 1
-    [(argnum, axis, in_stride)] = inscanvars
+    [(argnum, axis)] = inscanvars
     assert argnum == 0  # Shouldn't be possible to scan over scalar
                         # padding_value
     scan_pad_start, scan_pad_end, scan_pad_interior = padding_config[axis]
-    if not scan_pad_start == 0:
+    if any(padding_config[axis]):
         raise ScanConversionError(
-            "Padding at the beginning of a scanned axis is not yet "
-            "supported"
+            "Padding along scanned axis is not currently supported."
         )
-    if not scan_pad_end == scan_pad_interior:
-        raise ScanConversionError(
-            "End padding on scanned axis must be equal to interior padding"
-        )
-    dilation = scan_pad_interior + 1
-    if in_stride % dilation:
-        raise ScanConversionError(
-            "Pad dilation must exactly divide the input stride along scanned "
-            "axis"
-        )
-    out_stride = in_stride // dilation
     padding_config_ = list(padding_config)
     padding_config_.pop(axis)
     def body_fn(i, operand, padding_value):
-        ans = lax.pad(operand, padding_value, padding_config_)
-        return i + 1, lax.select(
-            i % in_stride,
-            jnp.full_like(ans, padding_value),
-            ans,
-        )
-    return 0, body_fn, [(0, axis, out_stride)], []
+        return i + 1, lax.pad(operand, padding_value, padding_config_)
+    return 0, body_fn, [(0, axis)], []
 register_rule(lax.pad_p, pad_rule)
 
 def concatenate_rule(inscanvars, *operands, dimension):
-    argnums, axes, instrides = unzip3(inscanvars)
+    argnums, axes = unzip2(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
             "All scanned arguments to concatenate must be scanned along the "
@@ -442,25 +390,21 @@ def concatenate_rule(inscanvars, *operands, dimension):
         raise ScanConversionError(
             "Global scan along concatenation dimension is not supported"
         )
-    assert all_equal(instrides) # This should be guaranteed now, because the
-                                # shapes must match along axis
-    instride = instrides[0]
     carry_init = 0
     def body_fn(i, *operands):
         operands = [
             jnp.expand_dims(
                 o if n in argnums else lax.dynamic_index_in_dim(
-                    o, i // instride, axis, False
+                    o, i, axis, False
                 ), axis
             )
             for n, o in enumerate(operands)
         ]
         ans = jnp.squeeze(
-            lax.concatenate_p.bind(*operands, dimension=dimension),
-            axis,
+            lax.concatenate_p.bind(*operands, dimension=dimension), axis,
         )
         return i + 1, ans
-    return carry_init, body_fn, [(0, axis, instride)], []
+    return carry_init, body_fn, [(0, axis)], []
 register_rule(lax.concatenate_p, concatenate_rule)
 
 def dot_general_rule(
@@ -472,19 +416,14 @@ def dot_general_rule(
     # Two supported options:
     #  (1) scan axis along batch axis of both inputs
     #  (2) scan axis along batch/non-contracting axis of one input
-    argnums, axes, strides = unzip3(inscanvars)
+    argnums, axes = unzip2(inscanvars)
     if len(argnums) == 2:  # Option (1)
         assert argnums == (0, 1)
         lhs_axis, rhs_axis = axes
-        stride, rhs_stride = strides
         if out_sharding is not None:
             # TODO: Check if it's ok to relax this
             raise ScanConversionError(
                 "Out sharding is not yet supported in dot_general"
-            )
-        if rhs_stride != stride:
-            raise ScanConversionError(
-                "Strides for lhs and rhs inputs to dot_general must match."
             )
         if lhs_axis not in lhs_batch_axes or rhs_axis not in rhs_batch_axes:
             raise ScanConversionError(
@@ -506,8 +445,8 @@ def dot_general_rule(
                 out_sharding=out_sharding,
             ), out_axis)
             return None, ans
-        return None, body_fn, [(0, out_axis, stride)], []
-    [argnum], [axis], [stride] = argnums, axes, strides
+        return None, body_fn, [(0, out_axis)], []
+    [argnum], [axis] = argnums, axes
     if argnum == 0:  # Option (2)
         if axis in lhs_contracting_axes:
             raise ScanConversionError(
@@ -525,7 +464,7 @@ def dot_general_rule(
             if axis in lhs_batch_axes:
                 rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
                 rhs = lax.dynamic_index_in_dim(
-                    rhs, i // stride, rhs_axis, keepdims=True
+                    rhs, i, rhs_axis, keepdims=True
                 )
             ans = jnp.squeeze(lax.dot_general_p.bind(
                 jnp.expand_dims(lhs, axis), rhs,
@@ -552,7 +491,7 @@ def dot_general_rule(
             if axis in rhs_batch_axes:
                 lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
                 lhs = lax.dynamic_index_in_dim(
-                    lhs, i // stride, lhs_axis, keepdims=True
+                    lhs, i, lhs_axis, keepdims=True
                 )
             ans = jnp.squeeze(lax.dot_general_p.bind(
                 lhs, jnp.expand_dims(rhs, axis),
@@ -561,7 +500,7 @@ def dot_general_rule(
                 out_sharding=out_sharding,
             ), out_axis)
             return i + 1, ans
-    return 0, body_fn, [(0, out_axis, stride)], []
+    return 0, body_fn, [(0, out_axis)], []
 register_rule(lax.dot_general_p, dot_general_rule)
 
 def reshape_rule(
@@ -572,7 +511,7 @@ def reshape_rule(
             "Dyanamic shapes in reshape are not currently supported in "
             "scan conversion."
         )
-    [(argnum, axis, stride)] = inscanvars
+    [(argnum, axis)] = inscanvars
     if sharding is not None:
         raise ScanConversionError(
             "Sharding is currently not supported in scan conversion of "
@@ -602,11 +541,11 @@ def reshape_rule(
         return None, lax.reshape_p.bind(
             x, new_sizes=new_sizes, dimensions=dimensions, sharding=sharding
         )
-    return None, body_fn, [(0, a, stride)], []
+    return None, body_fn, [(0, a)], []
 register_rule(lax.reshape_p, reshape_rule)
 
 def split_rule(inscanvars, operand, sizes, axis):
-    [(_, scan_axis, stride)] = inscanvars
+    [(_, scan_axis)] = inscanvars
     if scan_axis == axis:
         raise ScanConversionError(
             "Applying split along scanned axis is not supported."
@@ -615,12 +554,12 @@ def split_rule(inscanvars, operand, sizes, axis):
     def body_fn(carry, x):
         assert carry is None
         return None, lax.split(x, sizes, axis_)
-    outscanvars = [(n, scan_axis, stride) for n in range(len(sizes))]
+    outscanvars = [(n, scan_axis) for n in range(len(sizes))]
     return None, body_fn, outscanvars, []
 register_rule(lax.split_p, split_rule)
 
 def squeeze_rule(inscanvars, array, dimensions):
-    [(_, axis, stride)] = inscanvars
+    [(_, axis)] = inscanvars
     if axis in dimensions:
         # TODO: Maybe this is actually fine?
         raise ScanConversionError("Cannot squeeze scanned axis.")

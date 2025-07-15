@@ -87,12 +87,11 @@ class custom_scanagram:
 @dataclass
 class ScanInfo:
     axis: int
-    stride: int
 
 def custom_scanagram_rule(
     inscanvars, *args_flat, call, rule, in_tree, out_tree
 ):
-    argnums, axes, strides = util.unzip3(inscanvars)
+    argnums, axes = util.unzip2(inscanvars)
     args_flat = [ShapeDtypeStruct(a.shape, a.dtype) for a in args_flat]
     consts, arg = tree.unflatten(in_tree, args_flat)
     if not (set(argnums)
@@ -111,12 +110,7 @@ def custom_scanagram_rule(
             "All input arrays to custom_scanagram-decorated function must be "
             "scanned along the same axis."
         )
-    if not util.all_equal(strides):
-        raise ScanConversionError(
-            "All input arrays to custom_scanagram-decorated function must be "
-            "scanned with the same stride."
-        )
-    InVarInfo = ScanInfo(axes[0], strides[0])
+    InVarInfo = ScanInfo(axes[0])
     out_info, body_fn, carry_init = rule(InVarInfo, arg)
     def body_fn_flat(carry, *args_flat):
         _, arg = tree.unflatten(in_tree, args_flat)
@@ -128,9 +122,7 @@ def custom_scanagram_rule(
                 "custom_scanagram-decorated function."
             )
         return carry_new, tree.leaves(out)
-    out_info = [
-        (n, out_info.axis, out_info.stride) for n in range(out_tree.num_leaves)
-    ]
+    out_info = [(n, out_info.axis) for n in range(out_tree.num_leaves)]
     return carry_init, body_fn_flat, out_info, []
 
 def custom_scanagram_impl(*args, call, rule, in_tree, out_tree):
