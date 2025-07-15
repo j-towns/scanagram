@@ -64,4 +64,4 @@ def unzip_scanvars(scanvars):
         argnums.append(n)
         axes.append(s.axis)
         prefills.append(s.prefill)
-    return argnums, axes, prefills
+    return tuple(argnums), tuple(axes), tuple(prefills)
