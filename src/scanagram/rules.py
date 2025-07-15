@@ -28,8 +28,10 @@ def unzip_scanvars(scanvars):
         prefills.append(s.prefill)
     return argnums, axes, strides, prefills
 
-# Used when scanning along a batch dimension of op
+# Used when op is expressible as a (v)map over the scanned axis of all scanned
+# input variables
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
+    # These asserts should be enforced by the caller of this function
     assert not op.multiple_results
     argnums, axes, strides, prefills = unzip_scanvars(inscanvars)
     assert all_equal(axes)
@@ -39,12 +41,10 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
     prefill_len = prefills[0].shape[axis]
     assert not prefill_len % stride
     prefills_map = dict(zip(argnums, prefills))
-    prefills = [
-        prefills_map[n] if n in prefills_map
-        else lax.slice_in_dim(a, 0, prefill_len)
-        for n, a in enumerate(in_avals)
-    ]
-    out_prefill = op.bind(*prefills, **bind_params)
+    out_prefill = op.bind(
+        *[prefills_map[n] if n in prefills_map
+          else a for n, a in enumerate(in_avals)], **bind_params
+    )
     carry_init = None
 
     def body_fn(carry, *args):
@@ -134,7 +134,7 @@ nary_ops = [
 ]
 
 def nary_op_rule(op, inscanvars, *avals, **kwargs):
-    argnums, axes, strides = unzip3(inscanvars)
+    argnums, axes, strides, prefills = unzip_scanvars(inscanvars)
     axis = axes[0]
     stride = strides[0]
     if not all(a == axis for a in axes[1:]):
@@ -153,19 +153,31 @@ def nary_op_rule(op, inscanvars, *avals, **kwargs):
             "Broadcasting scanned variable along scanned axis is not "
             "supported"
         )
+    if not all_equal(p.shape[axis] for p in prefills):
+        raise ScanConversionError(
+            f"Different length prefills encountered in {op}"
+        )
     if all(a.ndim == 0 or a.shape[axis] == 1
            for i, a in enumerate(avals) if i not in argnums):
         return batch_rule(op, inscanvars, *avals, **kwargs)
+    prefill_len = prefills[0].shape[axis]
+    prefills_map = dict(zip(argnums, prefills))
+    out_prefill = op.bind(
+        *[prefills_map[n] if n in prefills_map
+          else lax.slice_in_dim(a, 0, prefill_len, axis=axis)
+          if a.shape[axis] > 1
+          else a for n, a in enumerate(avals)], **kwargs
+    )
     init = 0
     def body_fn(counter, *args):
         args = [
             a if i in argnums else lax.dynamic_index_in_dim(
-                a, counter // stride, axis, False
+                a, prefill_len + counter // stride, axis, False
             ) for i, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
         return counter + 1, ans
-    return init, body_fn, [(0, axis, stride)], []
+    return init, body_fn, [(0, ScanInfo(axis, stride, out_prefill))], []
 
 for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
@@ -435,7 +447,7 @@ def pad_rule(
     inscanvars, operand, padding_value, padding_config
 ):
     assert len(inscanvars) == 1
-    [(argnum, axis, in_stride)] = inscanvars
+    [argnum], [axis], [in_stride], [prefill] = unzip_scanvars(inscanvars)
     assert argnum == 0  # Shouldn't be possible to scan over scalar
                         # padding_value
     scan_pad_start, scan_pad_end, scan_pad_interior = padding_config[axis]
@@ -454,6 +466,10 @@ def pad_rule(
             "Pad dilation must exactly divide the input stride along scanned "
             "axis"
         )
+    out_prefill = (
+        lax.pad_p.bind(prefill, padding_value, padding_config)
+        if prefill.shape[axis] > 0 else prefill
+    )
     out_stride = in_stride // dilation
     padding_config_ = list(padding_config)
     padding_config_.pop(axis)
@@ -464,7 +480,7 @@ def pad_rule(
             jnp.full_like(ans, padding_value),
             ans,
         )
-    return 0, body_fn, [(0, axis, out_stride)], []
+    return 0, body_fn, [(0, ScanInfo(axis, out_stride, out_prefill))], []
 register_rule(lax.pad_p, pad_rule)
 
 def concatenate_rule(inscanvars, *operands, dimension):
