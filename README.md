@@ -29,8 +29,8 @@ for all input sequences `xs`,
 jnp.all(g(xs) == lax.scan(f, init, xs)[1])
 ```
 The `as_scan` function attempts to automatically infer a valid `(f, init)` pair, for causal input
-`g`. It also requires an example `xs` with the correct pytree structure, shapes and dtypes, in order
-to infer a jaxpr representation of `g`. For more detail see [below](#how-does-it-work).
+`g`. It also requires an example `xs` with the correct pytree structure, shape(s) and dtype(s).
+For more detail see [below](#how-does-it-work).
 
 ### Examples
 How can we use `as_scan` to automate the implementation of prefill and inference?
