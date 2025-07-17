@@ -130,8 +130,10 @@ def check_outvars(outvars, scanvars):
             "All outputs of the transformed function must not contain prefill."
         )
 
-def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
+def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None, args=None):
     top_level = inscanvars is None
+    if not top_level:
+        assert args is not None
     jaxpr = closed_jaxpr.jaxpr
     carry_init = []
     eqn_body_fns = []
@@ -154,6 +156,8 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None):
         else:
             return v.aval
     map(write, jaxpr.constvars, closed_jaxpr.consts)
+    if not top_level:
+        map(write, jaxpr.invars, args)
 
     # Map from Var to scan axis
     inscanvars = [

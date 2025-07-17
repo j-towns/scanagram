@@ -248,7 +248,7 @@ register_rule(lax.scan_p, scan_rule)
 def broadcast_in_dim_rule(
     inscanvars, operand, shape, broadcast_dimensions, sharding
 ):
-    [(_, inscan_axis)] = inscanvars
+    [_], [inscan_axis], [prefill] = unzip_scanvars(inscanvars)
     if sharding is not None:
         raise ScanConversionError(
             "Sharding in broadcast_in_dim not yet supported."
@@ -261,14 +261,25 @@ def broadcast_in_dim_rule(
     shape = list(shape)
     shape[broadcast_dimensions[inscan_axis]] = 1
     shape = tuple(shape)
+
     out_axis = broadcast_dimensions[inscan_axis]
+    out_prefill_shape = (
+        shape[:broadcast_dimensions[inscan_axis]] +
+        (prefill.shape[inscan_axis],)
+        + shape[broadcast_dimensions[inscan_axis] + 1:]
+    )
+    out_prefill = lax.broadcast_in_dim_p.bind(
+        prefill, shape=out_prefill_shape,
+        broadcast_dimensions=broadcast_dimensions, sharding=sharding,
+    )
+
     def body_fn(carry, x):
         assert carry is None
         return None, jnp.squeeze(lax.broadcast_in_dim_p.bind(
                 jnp.expand_dims(x, inscan_axis), shape=shape,
                 broadcast_dimensions=broadcast_dimensions, sharding=sharding
             ), out_axis)
-    return None, body_fn, [(0, out_axis)], []
+    return None, body_fn, [(0, ScanInfo(out_axis, out_prefill))], []
 register_rule(lax.broadcast_in_dim_p, broadcast_in_dim_rule)
 
 def _perm_inverse(p):
@@ -296,13 +307,13 @@ def conv_general_dilated_rule(
     dimension_numbers, feature_group_count, batch_group_count, precision,
     preferred_element_type
 ):
-    inscan_argnums, inscan_axes = unzip2(inscanvars)
+    inscan_argnums, inscan_axes, prefills = unzip_scanvars(inscanvars)
     if 1 in inscan_argnums:
         raise ScanConversionError(
             "Global scan is not currently supported over rhs of "
             "conv_general_dilated."
         )
-    [inscan_axis] = inscan_axes
+    [inscan_axis], [prefill] = inscan_axes, prefills
     if inscan_axis == dimension_numbers.lhs_spec[0]:
         if batch_group_count > 1:
             raise ScanConversionError(
@@ -338,12 +349,20 @@ def conv_general_dilated_rule(
             "Only causal padding is supported in conv."
         )
     length = lhs.shape[inscan_axis]
-    if length % window_stride:
-        # TODO: Consider relaxing this constraint
+    if window_stride != 1:
         raise ScanConversionError(
-            "Output scanned axis size of strided conv must exactly divide "
-            "input scanned axis size."
+            "Strided convolution along scanned axis is not currently "
+            "supported."
         )
+    out_prefill = lax.conv_general_dilated_p.bind(
+        prefill, rhs, window_strides=window_strides, padding=padding,
+        lhs_dilation=(lhs_dilation,), rhs_dilation=(rhs_dilation,),
+        dimension_numbers=dimension_numbers,
+        feature_group_count=feature_group_count,
+        batch_group_count=batch_group_count, precision=precision,
+        preferred_element_type=preferred_element_type,
+    )
+
     carry_shape = list(lhs.shape)
     carry_shape[inscan_axis] = rhs_dilation * (window_size - 1)
     carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
@@ -365,7 +384,7 @@ def conv_general_dilated_rule(
             lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
         )
         return (i + 1, carry_new), out
-    return carry_init, body_fn, [(0, outscan_axis)], []
+    return carry_init, body_fn, [(0, ScanInfo(outscan_axis, out_prefill))], []
 register_rule(lax.conv_general_dilated_p, conv_general_dilated_rule)
 
 def slice_rule(
@@ -612,10 +631,10 @@ def reshape_rule(
             "Dyanamic shapes in reshape are not currently supported in "
             "scan conversion."
         )
-    [(argnum, axis)] = inscanvars
+    [_], [axis], [prefill] = unzip_scanvars(inscanvars)
     if sharding is not None:
         raise ScanConversionError(
-            "Sharding is currently not supported in scan conversion of "
+            "Sharding is not currently supported in scan conversion of "
             "reshape."
         )
     if dimensions is None:
@@ -630,9 +649,16 @@ def reshape_rule(
         size = size * new_sizes[a]
     if operand.shape[axis] != new_sizes[a]:
         raise ScanConversionError("Reshape must preserve scanned axis.")
+    out_prefill_sizes = list(new_sizes)
+    out_prefill_sizes[a] = prefill.shape[axis]
+    out_prefill_sizes = tuple(out_prefill_sizes)
     new_sizes = list(new_sizes)
     new_sizes.pop(a)
     new_sizes = tuple(new_sizes)
+    out_prefill = lax.reshape_p.bind(
+        prefill, new_sizes=out_prefill_sizes, dimensions=dimensions,
+        sharding=sharding
+    )
     dimensions = list(dimensions)
     dimensions.remove(axis)
     dimensions = [d - 1 if d > axis else d for d in dimensions]
@@ -642,20 +668,23 @@ def reshape_rule(
         return None, lax.reshape_p.bind(
             x, new_sizes=new_sizes, dimensions=dimensions, sharding=sharding
         )
-    return None, body_fn, [(0, a)], []
+    return None, body_fn, [(0, ScanInfo(a, out_prefill))], []
 register_rule(lax.reshape_p, reshape_rule)
 
 def split_rule(inscanvars, operand, sizes, axis):
-    [(_, scan_axis)] = inscanvars
+    [_], [scan_axis], [prefill] = unzip_scanvars(inscanvars)
     if scan_axis == axis:
         raise ScanConversionError(
             "Applying split along scanned axis is not supported."
         )
+    out_prefills = lax.split_p.bind(prefill, sizes=sizes, axis=axis)
     axis_ = axis if axis < scan_axis else axis - 1
     def body_fn(carry, x):
         assert carry is None
         return None, lax.split(x, sizes, axis_)
-    outscanvars = [(n, scan_axis) for n in range(len(sizes))]
+    outscanvars = [
+        (n, ScanInfo(scan_axis, p)) for n, p in enumerate(out_prefills)
+    ]
     return None, body_fn, outscanvars, []
 register_rule(lax.split_p, split_rule)
 
@@ -669,7 +698,7 @@ register_rule(lax.squeeze_p, squeeze_rule)
 
 def call_rule(inscanvars, jaxpr, *args):
     body_fns, scanvars, carry_init, outscanvars = core.make_carry_init(
-        jaxpr, inscanvars
+        jaxpr, inscanvars, args
     )
     def body_fn(carry, *args):
         return core.body_fn(jaxpr, body_fns, scanvars, carry, args)
