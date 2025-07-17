@@ -398,6 +398,19 @@ def test_scan():
     xs = rng.randn(5, 2).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_scan_prefill():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2, "float32")
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        carry_out, ys = lax.scan(
+            lambda carry, x: (carry + x, carry + x), init_carry, xs
+        )
+        return ys[2:]
+    xs = rng.randn(5, 2).astype("float32")
+    prefill = rng.randn(2, 2).astype("float32")
+    test_util.check_scan(f, xs)
+
 def test_scan_some_inputs():
     rng = np.random.RandomState(0)
     init_carry = np.zeros(2, "float32")
@@ -413,11 +426,37 @@ def test_scan_some_inputs():
         return out
     test_util.check_scan(f, xs)
 
+def test_scan_some_inputs_prefill():
+    rng = np.random.RandomState(0)
+    init_carry = np.zeros(2, "float32")
+    xs = rng.randn(6, 2).astype("float32")
+    ys = rng.randn(8, 2).astype("float32")
+    prefill = rng.randn(2, 2).astype("float32")
+
+    def body_fn(carry, x_and_y):
+        x, y = x_and_y
+        return carry + x, carry + y + x
+
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        _, out = lax.scan(body_fn, init_carry, (xs, ys))
+        return out[2:]
+    test_util.check_scan(f, xs)
+
 def test_transpose():
     rng = np.random.RandomState(0)
     def f(xs):
         return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
     xs = rng.randn(2, 3, 4).astype("float32")
+    test_util.check_scan(f, xs)
+
+def test_transpose_prefill():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))[5:]
+    xs = rng.randn(2, 3, 4).astype("float32")
+    prefill = rng.randn(5, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_transpose_wrong_axis():
@@ -432,6 +471,15 @@ def test_broadcast_in_dim():
     def f(xs):
         return lax.broadcast_in_dim(xs, (2, 3, 4, 5), (0, 1, 2))
     xs = rng.randn(2, 1, 4).astype("float32")
+    test_util.check_scan(f, xs)
+
+def test_broadcast_in_dim_prefill():
+    rng = np.random.RandomState(0)
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        return lax.broadcast_in_dim(xs, (5, 3, 4, 5), (0, 1, 2))[3:]
+    xs = rng.randn(2, 1, 4).astype("float32")
+    prefill = rng.randn(3, 1, 4).astype("float32")
     test_util.check_scan(f, xs)
 
 def test_broadcast_in_dim_other_axis():
@@ -476,6 +524,34 @@ def test_conv_causal():
         )
     test_util.check_scan(f, lhs)
 
+def test_conv_causal_prefill_large():
+    window_size = 2
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(6, 4, 5).astype("float32")
+    prefill = rng.randn(4, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
+    def f(x):
+        x = jnp.concatenate([prefill, x])
+        return lax.conv_general_dilated(
+            x, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )[4:]
+    test_util.check_scan(f, lhs)
+
+def test_conv_causal_prefill_small():
+    window_size = 4
+    rng = np.random.RandomState(0)
+    lhs = rng.randn(6, 4, 5).astype("float32")
+    prefill = rng.randn(2, 4, 5).astype("float32")
+    rhs = rng.randn(window_size, 5, 6).astype("float32")
+    def f(x):
+        x = jnp.concatenate([prefill, x])
+        return lax.conv_general_dilated(
+            x, rhs, window_strides=[1], padding=[(window_size - 1, 0)],
+            dimension_numbers=("TNC", "TIO", "TNC"),
+        )[2:]
+    test_util.check_scan(f, lhs)
+
 def test_conv_rhs_dilation():
     window_size = 2
     rhs_dilation = 2
@@ -511,6 +587,15 @@ def test_slice():
         return lax.slice(operand, (0, 2, 1), (6, 3, 5), (1, 1, 2))
     test_util.check_scan(f, operand)
 
+def test_slice_prefill():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5).astype("float32")
+    prefill = rng.randn(2, 4, 5).astype("float32")
+    def f(operand):
+        operand = jnp.concatenate([prefill, operand])
+        return lax.slice(operand, (0, 2, 1), (8, 3, 5), (1, 1, 2))[2:]
+    test_util.check_scan(f, operand)
+
 def test_slice_none_stride():
     rng = np.random.RandomState(0)
     operand = rng.randn(6, 4, 5).astype("float32")
@@ -519,6 +604,13 @@ def test_slice_none_stride():
     test_util.check_scan(f, operand)
 
 def test_pad():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4).astype("float32")
+    def f(operand):
+        return lax.pad(operand, 3., [(0, 0, 0), (1, 2, 3)])
+    test_util.check_scan(f, operand)
+
+def test_pad_prefill():
     rng = np.random.RandomState(0)
     operand = rng.randn(6, 4).astype("float32")
     def f(operand):

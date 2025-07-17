@@ -207,6 +207,7 @@ def scan_rule(
         raise ScanConversionError(
             "Different length prefills detected in lax scan."
         )
+
     prefill_len = prefills[0].shape[0]
     prefill_map = dict(zip(argnums, prefills))
     out_prefills = lax.scan_p.bind(
@@ -216,12 +217,12 @@ def scan_rule(
           ], _split_transpose=_split_transpose, jaxpr=jaxpr,
         length=prefill_len, linear=linear, num_carry=num_carry,
         num_consts=num_consts, reverse=reverse, unroll=unroll
-    )[num_carry:]
-
-    consts, carry = (
-        xs_avals[:num_consts],
-        xs_avals[num_consts:num_consts + num_carry],
     )
+    carry, out_prefills = (
+        tuple(out_prefills[:num_carry]), out_prefills[num_carry:]
+    )
+
+    consts = xs_avals[:num_consts]
     def body_fun(i_and_carry, *args):
         i, old_carry = i_and_carry
         args = tuple(
@@ -362,10 +363,16 @@ def conv_general_dilated_rule(
         batch_group_count=batch_group_count, precision=precision,
         preferred_element_type=preferred_element_type,
     )
+    prefill_len = prefill.shape[inscan_axis]
 
-    carry_shape = list(lhs.shape)
-    carry_shape[inscan_axis] = rhs_dilation * (window_size - 1)
-    carry_init = 0, jnp.zeros(carry_shape, lhs.dtype)
+    carry_len = rhs_dilation * (window_size - 1)
+    carry_zeros_shape = list(lhs.shape)
+    carry_zeros_shape[inscan_axis] = max(0, carry_len - prefill_len)
+    carry_init = (0, jnp.concatenate([
+        jnp.zeros(carry_zeros_shape, lhs.dtype),
+        prefill[-carry_len:]
+    ], inscan_axis
+    ))
     def body_fn(i_and_carry, x, rhs):
         i, carry = i_and_carry
         lhs = lax.concatenate(
