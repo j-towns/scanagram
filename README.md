@@ -177,24 +177,23 @@ Causal self-attention is scan-like, but it isn't a JAX primitive, and it is
 composed from primitives which are not causal. But don't panic! There is a way
 to decorate a composite function like self-attention to tell Scanagram that the
 composite _is_ causal, even if it is made from parts which are not. Once this
-decorator has been added, a conversion rule can also be manually defined.  The
-details are discussed under [Custom Scanagram rules](#custom-scanagram-rules).
+decorator has been added, a conversion rule can be manually defined.
+
+The API for handling custom rules is inspired by JAX's API for [defining custom
+derivatives](https://docs.jax.dev/en/latest/notebooks/Custom_derivative_rules_for_Python_code.html).
+I am planning to write a more detailed tutorial on how to use custom rules.
+For now, a full example showing how to define a rule for masked multi-head
+attention can be found in
+[examples/masked\_self\_attention.py](examples/masked_self_attention.py), which
+I hope can be adapted for your needs. In future it would be helpful to write a
+library of commonly used self-attention functions and their scan conversion
+rules, but for now I'm leaving it up to users to adapt the example code to
+their use-case.
 
 ### Custom Scanagram rules
 Sometimes we want to use a composite function which is scan-like, but built out
 of JAX primitives which are not. The most common example is causal (AKA masked)
-self-attention. Scanagram provides an API for handling these functions, which
-is similar to JAX's API for
-[defining custom derivatives](https://docs.jax.dev/en/latest/notebooks/Custom_derivative_rules_for_Python_code.html). In
-future we could write a library of commonly used self-attention functions and
-their scan conversion rules, but for now this will be left up to the user.
-
-I am planning to write a more detailed tutorial on how to define custom rules.
-For now, a full example showing how to define a rule for masked multi-head
-attention can be found in
-[examples/masked\_self\_attention.py](examples/masked_self_attention.py), which
-I hope can be adapted for your needs.
-
+self-attention. 
 ## Installation
 I haven't uploaded a package to PyPI yet, so for now the package can be
 installed directly from Github using
