@@ -45,7 +45,8 @@ detail see [below](#how-does-it-work).
 How exactly can we use `as_scan` to automate the implementation of prefill and
 inference?  Let's start with the pure inference case, with no prompt/prefill.
 Assume we have a scan-like function `g`, already implemented and in scope. Then
-training, state initialization and generation could look something like this:
+the training loss, state initialization and generation could look something
+like this:
 ```python
 from functools import partial
 
@@ -134,13 +135,13 @@ scan-like, but also that each primitive used to evaluate `g` on its argument
 it's quite natural.
 
 Let's formally re-iterate what we mean by 'scan-like'. We said above that a
-function g is scan-like (or causal) if there exists an `f` such that for all
-inputs xs, we have
+function `g` is scan-like (or causal) if there exists an `f` such that for all
+inputs `xs`, we have
 ```python
 jnp.all(g(xs) == lax.scan(f, init, xs)[1])
 ```
 
-Here is an equivalent formulation: g is scan-like if for all integer `t` and
+Here is an equivalent formulation: `g` is scan-like if for all integer `t` and
 for all input `xs`, we have
 ```python
 jnp.all(g(xs)[:t] == g(xs[:t]))
@@ -164,7 +165,7 @@ are:
  - __Causal convolution__ Specifically, a call to `jax.lax.conv_general_dilated`
    which uses appropriate (causal) padding, with only 1 spatial dimension.
  - __Scan__ Obviously `scan` itself is scan-like!
- - Any operation without interaction along the sequence axis (some of these
+ - Any operation with no mixing along the sequence axis (some of these
    are still [TODO](https://github.com/j-towns/scanagram/issues/1)).
 
 Although the input and output of `g` must scan along the 0'th axis (this is
@@ -177,38 +178,33 @@ Causal self-attention is scan-like, but it isn't a JAX primitive, and it is
 composed from primitives which are not causal. But don't panic! There is a way
 to decorate a composite function like self-attention to tell Scanagram that the
 composite _is_ causal, even if it is made from parts which are not. Once this
-decorator has been added, a conversion rule can be manually defined.
+decorator has been added, a conversion rule must be manually defined.
 
 The API for handling custom rules is inspired by JAX's API for [defining custom
 derivatives](https://docs.jax.dev/en/latest/notebooks/Custom_derivative_rules_for_Python_code.html).
 I am planning to write a more detailed tutorial on how to use custom rules.
 For now, a full example showing how to define a rule for masked multi-head
 attention can be found in
-[examples/masked\_self\_attention.py](examples/masked_self_attention.py), which
-I hope can be adapted for your needs. In future it would be helpful to write a
-library of commonly used self-attention functions and their scan conversion
-rules, but for now I'm leaving it up to users to adapt the example code to
-their use-case.
+[examples/masked\_self\_attention.py](examples/masked_self_attention.py). In
+future it would be helpful to write a library of commonly used self-attention
+functions and their scan conversion rules, but for now I'm leaving it up to
+users to adapt the example code to their use-case.
 
-### Custom Scanagram rules
-Sometimes we want to use a composite function which is scan-like, but built out
-of JAX primitives which are not. The most common example is causal (AKA masked)
-self-attention. 
 ## Installation
-I haven't uploaded a package to PyPI yet, so for now the package can be
-installed directly from Github using
+I haven't uploaded a package to PyPI yet. For now Scanagram can be installed
+directly from Github using
 ```
 pip install git+https://github.com/j-towns/scanagram.git
 ```
 
 ## Project status and plans
-This project should be treated as experimental, with APIs likely to change and
-features added and removed. I plan to do the following as soon as I have time:
+This project is experimental, with APIs likely to change and features added and
+removed. I plan to do the following as soon as I have time:
  - More coverage of JAX ops (see
-   [https://github.com/j-towns/scanagram/issues/1](https://github.com/j-towns/scanagram/issues/1).
+   [https://github.com/j-towns/scanagram/issues/1](https://github.com/j-towns/scanagram/issues/1)).
  - A tutorial on how to define custom rules.
- - More examples, including end-to-end/realistic examples
- - Setup CI and packaging/deployment to PyPI
+ - More examples, including end-to-end/realistic examples.
+ - Setup CI and packaging/deployment to PyPI.
 
 ## Acknowledgements
 This project would not have been possible without
