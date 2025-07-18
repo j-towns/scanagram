@@ -33,7 +33,35 @@ The `as_scan` function attempts to automatically infer a valid `(f, init)` pair,
 shape(s) and dtype(s). For more technical detail see [below](#how-does-it-work).
 
 ### Examples
-How can we use `as_scan` to automate the implementation of prefill and inference?
+How exactly can we use `as_scan` to automate the implementation of prefill and inference?
+Let's start with the pure inference case, with no prompt/prefill. Assume we have a scan-like
+function `g`, already implemented and in scope. Then training, state initialization and
+generation could look something like this:
+```python
+from functools import partial
+
+import jax.numpy as jnp
+import jax
+import scanagram
+
+######################################
+# Assume g is defined somewhere here #
+######################################
+
+def shift(xs):
+    return jnp.concat([
+        jnp.zeros_like(xs, shape=(0, *xs.shape[1:])), xs
+    ])[:-1]
+
+@jax.jit
+def train_loss(xs, batch):
+    logits = g(shift(xs))
+    return cross_entropy(batch, xs)
+
+@partial(jax.jit, static_argnums=1)
+def generate(rng, length):
+    example_xs = jnp.zeros((length,
+```
 
 ### How does it work?
 TODO
