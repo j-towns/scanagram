@@ -109,7 +109,21 @@ def generate(rng, prompt, length):
 ```
 
 ### How does it work?
-TODO
+Scanagram's `as_scan` function is implemented using an _initial style JAX
+transformation_. That means that it works by first tracing the scan-like input
+function to a [jaxpr](https://docs.jax.dev/en/latest/jaxpr.html). This is an
+internal language used by JAX, which can be easily interpreted since it is, by
+default, in the form of a Python data structure.
+
+JAX functions are composed from a set of _primitive_ functions. For
+transformations like `grad` and `vmap`, the key is to define how each primitive
+should be transformed (by writing a transformation rule for each one), and then
+how to transform a whole function, using the rules for each primitive.
+
+We can take the same approach for Scanagram --- we define rules for converting
+each primitive to a scan (where possible), and also an interpreter for the
+jaxpr language which converts a whole function, applying the rules for each
+primitive it encounters.
 
 ### Which operations are supported
 TODO
