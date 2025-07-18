@@ -10,8 +10,9 @@ in three modes:
 
 An implementor can write a single neural network function which is
 _polymorphic_, and infers, based on the shapes of its inputs, and/or other
-flags, which mode to operate in. Code written in this way can be unclear, and
-this begs the question, can we separate the three concerns?
+flags, which mode to operate in. Code written in this way can be unclear and
+tedious to maintain, and this begs the question, can we tidy things up by
+separating the three concerns?
 
 One simple option is to write three distinct functions, one for each mode, and
 then write tests to ensure consistency between them. This works, and might be
@@ -164,7 +165,7 @@ are:
    which uses appropriate (causal) padding, with only 1 spatial dimension.
  - __Scan__ Obviously `scan` itself is scan-like!
  - Any operation without interaction along the sequence axis (some of these
-   are still TODO).
+   are still [TODO](https://github.com/j-towns/scanagram/issues/1)).
 
 Although the input and output of `g` must scan along the 0'th axis (this is
 to align the API with that of `jax.lax.scan`), within `g` the scan
