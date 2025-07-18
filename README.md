@@ -143,14 +143,14 @@ jnp.all(g(xs) == lax.scan(f, init, xs)[1])
 Here is an equivalent formulation: g is scan-like if for all integer `t` and
 for all input `xs`, we have
 ```python
-g(xs)[:t] = g(xs[:t])
+jnp.all(g(xs)[:t] == g(xs[:t]))
 ```
 You might take some convincing that these two properties really are equivalent.
 For now I'll leave the proof to you as an exercise 😀. This second version is
-convenient because it doesn't make reference to `scan`, and because the
-symmetry between the two sides of the equation is clear. This symmetry can
-easily be used to show that if two functions `g1` and `g2` are scan-like, then
-so is the composition `lambda xs: h1(h2(xs))`.
+convenient because the symmetry between the two sides of the equation is clear.
+This symmetry can easily be used to show that if two functions `g1` and `g2`
+are scan-like, then so is the composition `lambda xs: h1(h2(xs))` (again feel
+free to work out a proof yourself if you want to).
 
 All of this formal math basically tells us that being causal/scan-like is a
 convenient property which respects function composition. If each layer in a
@@ -173,10 +173,11 @@ axis can be moved to different positions using ops like `transpose` and
 `moveaxis`.
 
 ### What about causal self-attention?
-Causal self-attention is scan-like, but it isn't a JAX primitive, and it is composed from primitives which
-are not causal. But don't panic! There is a way to decorate a composite function
-like self-attention to tell Scanagram that the composite _is_ causal (even
-if it is made from parts which are not) and to define a conversion rule by hand.
-The API is discussed under [Custom Scanagram rules](#custom-scanagram-rules).
+Causal self-attention is scan-like, but it isn't a JAX primitive, and it is
+composed from primitives which are not causal. But don't panic! There is a way
+to decorate a composite function like self-attention to tell Scanagram that the
+composite _is_ causal, even if it is made from parts which are not. Once this
+decorator has been added, a conversion rule can also be manually defined.  The
+API is discussed under [Custom Scanagram rules](#custom-scanagram-rules).
 
 ### Custom Scanagram rules
