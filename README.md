@@ -181,3 +181,15 @@ decorator has been added, a conversion rule can also be manually defined.  The
 API is discussed under [Custom Scanagram rules](#custom-scanagram-rules).
 
 ### Custom Scanagram rules
+Sometimes we want to use a composite function which is scan-like, but built out
+of JAX primitives which are not. The most common example is causal (AKA masked)
+self-attention. Scanagram provides an API for handling these functions, which
+is similar to JAX's API for
+[defining custom derivatives](https://docs.jax.dev/en/latest/notebooks/Custom_derivative_rules_for_Python_code.html). In
+future we could write a library of commonly used self-attention functions and
+their scan conversion rules, but for now this will be left up to the user.
+
+I am planning to write a more detailed tutorial on how to define custom rules.
+For now, a full example showing how to define a rule for masked multi-head
+attention can be found in
+[examples/masked\_self\_attention.py](examples/masked_self_attention.py).
