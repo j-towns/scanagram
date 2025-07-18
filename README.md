@@ -132,28 +132,29 @@ scan-like, but also that each primitive used to evaluate `g` on its argument
 `xs` is also scan-like. This might sound like a strong assumption, but actually
 it's quite natural.
 
-Let's formally re-iterate what we mean by 'scan-like'. We say a function h is
-scan-like (or causal) if there exists an `f` such that for all inputs xs, we
-have
+Let's formally re-iterate what we mean by 'scan-like'. We said above that a
+function g is scan-like (or causal) if there exists an `f` such that for all
+inputs xs, we have
 ```python
-jnp.all(h(xs) == lax.scan(f, init, xs)[1])
+jnp.all(g(xs) == lax.scan(f, init, xs)[1])
 ```
 
-Here is an equivalent formulation: h is scan-like if for all integer `t` and
+Here is an equivalent formulation: g is scan-like if for all integer `t` and
 for all input `xs`, we have
 ```python
-h(xs)[:t] = h(xs[:t])
+g(xs)[:t] = g(xs[:t])
 ```
 You might take some convincing that these two properties really are equivalent.
 For now I'll leave the proof to you as an exercise 😀. This second version is
 convenient because it doesn't make reference to `scan`, and because the
 symmetry between the two sides of the equation is clear. This symmetry can
-easily be used to show that if two functions `h1` and `h2` are scan-like, then
+easily be used to show that if two functions `g1` and `g2` are scan-like, then
 so is the composition `lambda xs: h1(h2(xs))`.
 
 All of this formal math basically tells us that being causal/scan-like is a
-convenient property which respects function composition. If we can find an `(f,
-init)` pair for each primitive, then composing them is straightforward.
+convenient property which respects function composition. If each layer in a
+neural network is causal, then the overall network is guaranteed to be causal
+too. Implementors of autoregressive models have long used this property
+implicitly without needing to state or prove it formally.
 
-### Which operations are supported
-TODO
+#### Which operations are supported?
