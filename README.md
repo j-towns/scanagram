@@ -178,7 +178,7 @@ composed from primitives which are not causal. But don't panic! There is a way
 to decorate a composite function like self-attention to tell Scanagram that the
 composite _is_ causal, even if it is made from parts which are not. Once this
 decorator has been added, a conversion rule can also be manually defined.  The
-API is discussed under [Custom Scanagram rules](#custom-scanagram-rules).
+details are discussed under [Custom Scanagram rules](#custom-scanagram-rules).
 
 ### Custom Scanagram rules
 Sometimes we want to use a composite function which is scan-like, but built out
@@ -192,4 +192,31 @@ their scan conversion rules, but for now this will be left up to the user.
 I am planning to write a more detailed tutorial on how to define custom rules.
 For now, a full example showing how to define a rule for masked multi-head
 attention can be found in
-[examples/masked\_self\_attention.py](examples/masked_self_attention.py).
+[examples/masked\_self\_attention.py](examples/masked_self_attention.py), which
+I hope can be adapted for your needs.
+
+## Installation
+I haven't uploaded a package to PyPI yet, so for now the package can be
+installed directly from Github using
+```
+pip install git+https://github.com/j-towns/scanagram.git
+```
+
+## Project status and plans
+This project should be treated as experimental, with APIs likely to change and
+features added and removed. I plan to do the following as soon as I have time:
+ - More coverage of JAX ops (see
+   [https://github.com/j-towns/scanagram/issues/1](https://github.com/j-towns/scanagram/issues/1).
+ - A tutorial on how to define custom rules.
+ - More examples, including end-to-end/realistic examples
+ - Setup CI and packaging/deployment to PyPI
+
+## Acknowledgements
+This project would not have been possible without
+[Julius Kunze](https://juliuskunze.com/). Julius helped me out a lot with [an
+earlier attempt at solving the same
+problem](https://github.com/j-towns/fastar), and provided helpful encouragement
+and advice. My MSc students [Daniel](https://daniel-gallo.github.io/) and
+[Konrad](https://github.com/konradszewczyk) also helped to test Scanagram on a
+large-scale end-to-end model. Thanks also to [Jacob
+Menick](https://github.com/jacobmenick) for encouragement.

@@ -153,7 +153,7 @@ def custom_scanagram_rule(
         out_prefill_flat, _ = tree.flatten(out_info.prefill)
         out_info = [
             (n, core.ScanInfo(out_info.axis, p)) for n, p in
-            enumerate(out_prefill_fat)
+            enumerate(out_prefill_flat)
         ]
     return carry_init, body_fn_flat, out_info, []
 
