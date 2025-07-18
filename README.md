@@ -112,18 +112,48 @@ def generate(rng, prompt, length):
 Scanagram's `as_scan` function is implemented using an _initial style JAX
 transformation_. That means that it works by first tracing the scan-like input
 function to a [jaxpr](https://docs.jax.dev/en/latest/jaxpr.html). This is an
-internal language used by JAX, which can be easily interpreted since it is, by
-default, in the form of a Python data structure.
+internal language used by JAX, which can be easily interpreted since it is a
+Python data structure.
 
 JAX functions are composed from a set of _primitive_ functions. For
 transformations like `grad` and `vmap`, the key is to define how each primitive
 should be transformed (by writing a transformation rule for each one), and then
 how to transform a whole function, using the rules for each primitive.
 
-We can take the same approach for Scanagram --- we define rules for converting
+We can take the same approach for Scanagram—we define rules for converting
 each primitive to a scan (where possible), and also an interpreter for the
 jaxpr language which converts a whole function, applying the rules for each
-primitive it encounters.
+primitive it encounters. Because JAX does a lot of the hard work, Scanagram
+turns out to be pretty simple. The [core](src/scanagram/core.py), where the
+interpreter lives, is currently only 200 lines of code.
+
+Doing things in this way means that we need to assume not just that `g` is
+scan-like, but also that each primitive used to evaluate `g` on its argument
+`xs` is also scan-like. This might sound like a strong assumption, but actually
+it's quite natural.
+
+Let's formally re-iterate what we mean by 'scan-like'. We say a function h is
+scan-like (or causal) if there exists an `f` such that for all inputs xs, we
+have
+```python
+jnp.all(h(xs) == lax.scan(f, init, xs)[1])
+```
+
+Here is an equivalent formulation: h is scan-like if for all integer `t` and
+for all input `xs`, we have
+```python
+h(xs)[:t] = h(xs[:t])
+```
+You might take some convincing that these two properties really are equivalent.
+For now I'll leave the proof to you as an exercise 😀. This second version is
+convenient because it doesn't make reference to `scan`, and because the
+symmetry between the two sides of the equation is clear. This symmetry can
+easily be used to show that if two functions `h1` and `h2` are scan-like, then
+so is the composition `lambda xs: h1(h2(xs))`.
+
+All of this formal math basically tells us that being causal/scan-like is a
+convenient property which respects function composition. If we can find an `(f,
+init)` pair for each primitive, then composing them is straightforward.
 
 ### Which operations are supported
 TODO
