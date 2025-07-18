@@ -157,4 +157,25 @@ neural network is causal, then the overall network is guaranteed to be causal
 too. Implementors of autoregressive models have long used this property
 implicitly without needing to state or prove it formally.
 
-#### Which operations are supported?
+### Which operations are supported?
+Not all JAX primitives are scan-like. The main things that should be supported
+are:
+ - __Causal convolution__ Specifically, a call to `jax.lax.conv_general_dilated`
+   which uses appropriate (causal) padding, with only 1 spatial dimension.
+ - __Scan__ Obviously `scan` itself is scan-like!
+ - Any operation without interaction along the sequence axis (some of these
+   are still TODO).
+
+Although the input and output of `g` must scan along the 0'th axis (this is
+to align the API with that of `jax.lax.scan`), within `g` the scan
+axis can be moved to different positions using ops like `transpose` and
+`moveaxis`.
+
+### What about causal self-attention?
+Causal self-attention is scan-like, but it isn't a JAX primitive, and it is composed from primitives which
+are not causal. But don't panic! There is a way to decorate a composite function
+like self-attention to tell Scanagram that the composite _is_ causal (even
+if it is made from parts which are not) and to define a conversion rule by hand.
+The API is discussed under [Custom Scanagram rules](#custom-scanagram-rules).
+
+### Custom Scanagram rules
