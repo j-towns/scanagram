@@ -149,7 +149,7 @@ You might take some convincing that these two properties really are equivalent.
 For now I'll leave the proof to you as an exercise 😀. This second version is
 convenient because the symmetry between the two sides of the equation is clear.
 This symmetry can easily be used to show that if two functions `g1` and `g2`
-are scan-like, then so is the composition `lambda xs: h1(h2(xs))` (again feel
+are scan-like, then so is the composition `lambda xs: g1(g2(xs))` (again feel
 free to work out a proof yourself if you want to).
 
 All of this formal math basically tells us that being causal/scan-like is a
