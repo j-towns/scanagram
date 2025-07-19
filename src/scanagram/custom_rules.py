@@ -119,7 +119,7 @@ def custom_scanagram_rule(
     if prefill_len == 0:
         prefills = None
     else:
-        _, prefills = tree.unflatten(in_tree, prefills_flat)
+        prefills = in_tree.children()[1].unflatten(prefills_flat)
     InVarInfo = ScanInfo(axes[0], prefills)
     out_info, body_fn, carry_init = rule(InVarInfo, arg)
     def body_fn_flat(carry, *args_flat):
