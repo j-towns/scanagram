@@ -214,4 +214,6 @@ problem](https://github.com/j-towns/fastar), and provided helpful encouragement
 and advice. My MSc students [Daniel](https://daniel-gallo.github.io/) and
 [Konrad](https://github.com/konradszewczyk) also helped to test Scanagram on a
 large-scale end-to-end model. Thanks also to [Jacob
-Menick](https://github.com/jacobmenick) for encouragement.
+Menick](https://github.com/jacobmenick) for encouragement. Thanks to
+[Alex Mansbridge](https://www.turing.ac.uk/people/former-doctoral-students/alex-mansbridge)
+and [Tom Bird](https://tom-bird.github.io/) for help with the name.
