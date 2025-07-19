@@ -10,7 +10,6 @@ from jax import tree_util
 from jax.interpreters import ad, mlir
 from jax._src.interpreters import xla
 from jax import ShapeDtypeStruct
-from jax import jvp
 from jax.extend.linear_util import wrap_init
 from jax.api_util import debug_info
 import jax.numpy as jnp

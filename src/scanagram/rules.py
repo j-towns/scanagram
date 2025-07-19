@@ -1,14 +1,10 @@
 from functools import partial
-from itertools import repeat
 import numpy as np
 from jax import numpy as jnp, lax
-from jax import tree
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
 from jax._src.pjit import pjit_p
-from scanagram.util import (
-    safe_map, unzip2, safe_zip, all_equal, unzip_scanvars
-)
+from scanagram.util import safe_map, safe_zip, all_equal, unzip_scanvars
 
 from scanagram.core import register_rule, ScanConversionError
 from scanagram import core
@@ -27,7 +23,6 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
     assert all_equal(axes)
     axis = axes[0]
     assert all_equal(p.shape[axis] for p in prefills)
-    prefill_len = prefills[0].shape[axis]
     prefills_map = dict(zip(argnums, prefills))
     out_prefill = op.bind(
         *[prefills_map[n] if n in prefills_map
@@ -349,7 +344,6 @@ def conv_general_dilated_rule(
         raise ScanConversionError(
             "Only causal padding is supported in conv."
         )
-    length = lhs.shape[inscan_axis]
     if window_stride != 1:
         raise ScanConversionError(
             "Strided convolution along scanned axis is not currently "
@@ -370,7 +364,10 @@ def conv_general_dilated_rule(
     carry_zeros_shape[inscan_axis] = max(0, carry_len - prefill_len)
     carry_init = (0, jnp.concatenate([
         jnp.zeros(carry_zeros_shape, lhs.dtype),
-        prefill[-carry_len:]
+        lax.slice_in_dim(
+            prefill, max(prefill_len - carry_len, 0), prefill_len,
+            axis=inscan_axis
+        )
     ], inscan_axis
     ))
     def body_fn(i_and_carry, x, rhs):
