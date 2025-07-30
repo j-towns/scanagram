@@ -18,7 +18,7 @@ def as_scan(fun, example_xs):
 
         This is a mathematically compact way of saying that within ``fun``,
         information cannot flow backwards along the 0'th input/output axis.
-        Note that with ``fun`` the position of this axis can be moved using
+        Note that within ``fun`` the position of this axis can be moved using
         transpose/moveaxis, as long as causality along that special axis is
         maintained. We require that each lax primitive call within ``fun`` is
         causal. Pytree inputs and outputs are allowed, in which case condition
