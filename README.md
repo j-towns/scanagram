@@ -122,12 +122,13 @@ transformations like `grad` and `vmap`, the key is to define how each primitive
 should be transformed (by writing a transformation rule for each one), and then
 how to transform a whole function, using the rules for each primitive.
 
-We can take the same approach for Scanagram—we define rules for converting
-each primitive to a scan (where possible), and also an interpreter for the
-jaxpr language which converts a whole function, applying the rules for each
-primitive it encounters. Because JAX does a lot of the hard work, Scanagram
-turns out to be pretty simple. The [core](src/scanagram/core.py), where the
-interpreter lives, is currently only 200 lines of code.
+We can take the same approach for Scanagram—we define
+[rules](src/scanagram/rules.py) for converting each primitive to a scan (where
+possible), and also an interpreter for the jaxpr language which converts a
+whole function, applying the rules for each primitive it encounters. Because
+JAX does a lot of the hard work, Scanagram turns out to be pretty simple. The
+[core](src/scanagram/core.py), where the interpreter lives, is currently only
+200 lines of code.
 
 Doing things in this way means that we need to assume not just that `g` is
 scan-like, but also that each primitive used to evaluate `g` on its argument
