@@ -3,7 +3,7 @@ import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
-from jax._src.pjit import pjit_p
+from jax._src.pjit import jit_p
 from scanagram.util import safe_map, safe_zip, all_equal, unzip_scanvars
 
 from scanagram.core import register_rule, ScanConversionError
@@ -708,14 +708,14 @@ def call_rule(inscanvars, jaxpr, *args):
         return core.body_fn(jaxpr, body_fns, scanvars, carry, args)
     return carry_init, body_fn, outscanvars, []
 
-def pjit_rule(
+def jit_rule(
     inscanvars, *args, jaxpr, in_shardings, out_shardings, in_layouts,
     out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
     compiler_options_kvs,
 ):
     # TODO: Figure out how to handle (non-default cases of) all the params
     return call_rule(inscanvars, jaxpr, *args)
-register_rule(pjit_p, pjit_rule)
+register_rule(jit_p, jit_rule)
 
 def custom_vjp_call_rule(inscanvars, *args, call_jaxpr, **_):
     # TODO: Maybe warn the user of undefined behavour if you take the gradient
