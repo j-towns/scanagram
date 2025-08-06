@@ -775,3 +775,238 @@ def test_squeeze():
     def f(xs):
         return lax.squeeze(xs, [1])
     test_util.check_scan(f, xs)
+
+def test_reduce_p_basic():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def add_op(x, y):
+        return x + y
+
+    def f(xs):
+        return lax.reduce(xs, jnp.array(0.0), add_op, dimensions=(1,))
+    test_util.check_scan(f, xs)
+
+def test_reduce_p_multiple_axes():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def add_op(x, y):
+        return x + y
+
+    def f(xs):
+        return lax.reduce(xs, jnp.array(0.0), add_op, dimensions=(1, 2))
+    test_util.check_scan(f, xs)
+
+def test_reduce_p_custom_computation():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+
+    def max_op(x, y):
+        return jnp.maximum(x, y)
+
+    def f(xs):
+        return lax.reduce(xs, jnp.array(-jnp.inf), max_op, dimensions=(1,))
+    test_util.check_scan(f, xs)
+
+def test_reduce_p_multiple_operands():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+    ys = rng.randn(6, 4).astype("float32")
+
+    def sum_op(accs, vals):
+        x_acc, y_acc = accs
+        x, y = vals
+        return x_acc + x, y_acc + y
+
+    def f(inputs):
+        xs, ys = inputs
+        return lax.reduce((xs, ys), (jnp.array(0.0), jnp.array(0.0)),
+                         sum_op, dimensions=(1,))
+    test_util.check_scan(f, (xs, ys))
+
+def test_reduce_p_prefill():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+    prefill = rng.randn(3, 4).astype("float32")
+
+    def add_op(x, y):
+        return x + y
+
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        result = lax.reduce(xs, jnp.array(0.0), add_op, dimensions=(1,))
+        return result[3:]
+    test_util.check_scan(f, xs)
+
+def test_reduce_p_scan_axis_error():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def add_op(x, y):
+        return x + y
+
+    def f(xs):
+        # This should fail because we're trying to reduce along the scan axis (0)
+        return lax.reduce(xs, jnp.array(0.0), add_op, dimensions=(0, 1))
+
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_reduce_p_complex_computation():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+
+    def weighted_sum_op(acc, x):
+        # More complex computation: weighted sum with position
+        return acc + x * (acc + 1.0)
+
+    def f(xs):
+        return lax.reduce(xs, jnp.array(0.0), weighted_sum_op, dimensions=(1,))
+    test_util.check_scan(f, xs)
+
+def test_rev_basic():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        return lax.rev(xs, dimensions=(1,))
+    test_util.check_scan(f, xs)
+
+def test_rev_multiple_dimensions():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        return lax.rev(xs, dimensions=(1, 2))
+    test_util.check_scan(f, xs)
+
+def test_rev_1d():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(8).astype("float32")
+
+    def f(xs):
+        # This should fail - trying to reverse the scan axis
+        return lax.rev(xs, dimensions=(0,))
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_rev_scan_axis_error():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        # This should fail - trying to reverse the scan axis (0)
+        return lax.rev(xs, dimensions=(0, 1))
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_rev_with_prefill():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+    prefill = rng.randn(3, 4, 5).astype("float32")
+
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        result = lax.rev(xs, dimensions=(1,))
+        return result[3:]
+    test_util.check_scan(f, xs)
+
+def test_rev_other_axis():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        # Move scan axis from 0 to 1, reverse axis 0 (was axis 1), then move back
+        xs = jnp.moveaxis(xs, 0, 1)
+        xs = lax.rev(xs, dimensions=(0,))
+        return jnp.moveaxis(xs, 1, 0)
+    test_util.check_scan(f, xs)
+
+def test_rev_empty_dimensions():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        # Reverse no dimensions (should be identity)
+        return lax.rev(xs, dimensions=())
+    test_util.check_scan(f, xs)
+
+def test_sort_basic():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        return lax.sort(xs, dimension=1)
+    test_util.check_scan(f, xs)
+
+def test_sort_last_dimension():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        return lax.sort(xs, dimension=2)
+    test_util.check_scan(f, xs)
+
+def test_sort_scan_axis_error():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        # This should fail - trying to sort along the scan axis (0)
+        return lax.sort(xs, dimension=0)
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_sort_1d_error():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(8).astype("float32")
+
+    def f(xs):
+        # This should fail - trying to sort the only dimension (scan axis)
+        return lax.sort(xs, dimension=0)
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, xs)
+
+def test_sort_multiple_arrays():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+    ys = rng.randn(6, 4).astype("float32")
+
+    def f(inputs):
+        xs, ys = inputs
+        return lax.sort((xs, ys), dimension=1)
+    test_util.check_scan(f, (xs, ys))
+
+def test_sort_with_prefill():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+    prefill = rng.randn(3, 4).astype("float32")
+
+    def f(xs):
+        xs = jnp.concatenate([prefill, xs])
+        result = lax.sort(xs, dimension=1)
+        return result[3:]
+    test_util.check_scan(f, xs)
+
+def test_sort_other_axis():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4, 5).astype("float32")
+
+    def f(xs):
+        # Move scan axis from 0 to 1, sort axis 0 (was axis 1), then move back
+        xs = jnp.moveaxis(xs, 0, 1)
+        xs = lax.sort(xs, dimension=0)
+        return jnp.moveaxis(xs, 1, 0)
+    test_util.check_scan(f, xs)
+
+def test_sort_is_stable_false():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(6, 4).astype("float32")
+
+    def f(xs):
+        return lax.sort(xs, dimension=1, is_stable=False)
+    test_util.check_scan(f, xs)
+
+def test_sort_integer_values():
+    rng = np.random.RandomState(0)
+    xs = rng.randint(0, 10, size=(6, 4)).astype("int32")
+
+    def f(xs):
+        return lax.sort(xs, dimension=1)
+    test_util.check_scan(f, xs)

@@ -17,8 +17,6 @@ zip = safe_zip
 # Used when op is expressible as a (v)map over the scanned axis of all scanned
 # input variables
 def batch_rule(op, inscanvars, *in_avals, **bind_params):
-    # These asserts should be enforced by the caller of this function
-    assert not op.multiple_results
     argnums, axes, prefills = unzip_scanvars(inscanvars)
     assert all_equal(axes)
     axis = axes[0]
@@ -33,11 +31,20 @@ def batch_rule(op, inscanvars, *in_avals, **bind_params):
     def body_fn(carry, *args):
         assert carry is None
         args = list(args)
-        for argnum, axis in zip(argnums, axes):
-            args[argnum] = jnp.expand_dims(args[argnum], axis)
+        for argnum, axis_val in zip(argnums, axes):
+            args[argnum] = jnp.expand_dims(args[argnum], axis_val)
         ans = op.bind(*args, **bind_params)
-        return None, lax.squeeze(ans, [axis])
-    return carry_init, body_fn, [(0, ScanInfo(axis, out_prefill))], []
+        if op.multiple_results:
+            return None, tuple(lax.squeeze(a, [axis]) for a in ans)
+        else:
+            return None, lax.squeeze(ans, [axis])
+
+    if op.multiple_results:
+        out_scanvars = [(i, ScanInfo(axis, pf)) for i, pf in enumerate(out_prefill)]
+    else:
+        out_scanvars = [(0, ScanInfo(axis, out_prefill))]
+
+    return carry_init, body_fn, out_scanvars, []
 
 
 nary_ops = [
@@ -181,6 +188,51 @@ def reduce_rule(op, inscanvars, xs_aval, axes):
     return batch_rule(op, inscanvars, xs_aval, axes=axes)
 for op in reduce_ops:
     register_rule(op, partial(reduce_rule, op))
+
+def reduce_p_rule(
+        inscanvars, *operands_and_inits, computation, dimensions, jaxpr
+):
+    num_operands = len(operands_and_inits) // 2
+    argnums, axes, prefills = unzip_scanvars(inscanvars)
+    if any(a >= num_operands for a in argnums):
+        raise ScanConversionError(
+            "Global scan over init_values in reduce_p is not supported."
+        )
+    if any(a in dimensions for a in axes):
+        raise ScanConversionError(
+            "Global scan operating along reduce axis is not supported."
+        )
+    return batch_rule(lax.reduce_p, inscanvars, *operands_and_inits,
+                      computation=computation, dimensions=dimensions, jaxpr=jaxpr)
+register_rule(lax.reduce_p, reduce_p_rule)
+
+def rev_rule(inscanvars, operand, dimensions):
+    _, [inscan_axis], _ = unzip_scanvars(inscanvars)
+    if inscan_axis in set(dimensions):
+        raise ScanConversionError(
+            "Global scan along a reversed axis is not supported."
+        )
+    return batch_rule(lax.rev_p, inscanvars, operand, dimensions=dimensions)
+register_rule(lax.rev_p, rev_rule)
+
+def sort_rule(inscanvars, *operands, dimension, is_stable, num_keys):
+    argnums, axes, prefills = unzip_scanvars(inscanvars)
+    if not all_equal(axes):
+        raise ScanConversionError(
+            "All scanned inputs to sort must be scanned along the same axis. "
+            "Support for different scan axes may be added in future."
+        )
+    inscan_axis = axes[0]
+    if inscan_axis == dimension:
+        raise ScanConversionError(
+            "Global scan along a sorted axis is not supported."
+        )
+
+    return batch_rule(
+        lax.sort_p, inscanvars, *operands, dimension=dimension,
+        is_stable=is_stable, num_keys=num_keys
+    )
+register_rule(lax.sort_p, sort_rule)
 
 def scan_rule(
     inscanvars, *xs_avals, _split_transpose, jaxpr, length, linear, num_carry,
