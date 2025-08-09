@@ -3,7 +3,13 @@ import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
-from jax._src.pjit import jit_p
+import jax._src.pjit
+# Backward compatibility with jax < 0.7
+jit_p = (
+    jax._src.pjit.jit_p
+    if hasattr(jax._src.pjit, "jit_p") else
+    jax._src.pjit.pjit_p
+)
 from scanagram.util import safe_map, safe_zip, all_equal, unzip_scanvars
 
 from scanagram.core import register_rule, ScanConversionError
