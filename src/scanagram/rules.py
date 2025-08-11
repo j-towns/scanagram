@@ -780,3 +780,89 @@ def custom_jvp_call_rule(inscanvars, *args, call_jaxpr, **_):
     # of this?
     return call_rule(inscanvars, call_jaxpr, *args)
 register_rule(primitives.custom_jvp_call_p, custom_jvp_call_rule)
+
+def gather_rule(
+    inscanvars, operand, start_indices, dimension_numbers, slice_sizes,
+    indices_are_sorted=False, unique_indices=False, mode=None, fill_value=None
+):
+    if len(inscanvars) > 1:
+        raise ScanConversionError(
+            "gather with multiple scanned inputs is not supported"
+        )
+
+    [argnum], [axis], [prefill] = unzip_scanvars(inscanvars)
+
+    if argnum == 1:  # Scanning over start_indices
+        raise ScanConversionError(
+            "Global scan over start_indices in gather is not supported"
+        )
+
+    start_index_map = dimension_numbers.start_index_map
+    operand_batching_dims = dimension_numbers.operand_batching_dims
+
+    if axis in start_index_map:
+        # The scan axis is being dynamically indexed
+        raise ScanConversionError(
+            "gather with dynamic start_index along scanned axis is not "
+            "supported"
+        )
+
+    if operand_batching_dims != ():
+        raise ScanConversionError(
+            "gather with operand_batching_dims is not currently supported"
+        )
+
+    # Ensure scan axis size is preserved
+    if slice_sizes[axis] != operand.shape[axis]:
+        raise ScanConversionError(
+            "gather must preserve scan axis size: got "
+            f"slice_sizes[{axis}]={slice_sizes[axis]} "
+            f"but operand.shape[{axis}]={operand.shape[axis]}"
+        )
+
+    # Compute output prefill with adjusted slice_sizes
+    prefill_len = prefill.shape[axis]
+    prefill_slice_sizes = list(slice_sizes)
+    prefill_slice_sizes[axis] = prefill_len
+
+    out_prefill = lax.gather_p.bind(
+        prefill, start_indices,
+        dimension_numbers=dimension_numbers,
+        slice_sizes=tuple(prefill_slice_sizes),
+        indices_are_sorted=indices_are_sorted,
+        unique_indices=unique_indices, mode=mode, fill_value=fill_value
+    )
+
+    # Calculate output scan axis
+    collapsed_slice_dims = dimension_numbers.collapsed_slice_dims
+
+    if axis in collapsed_slice_dims:
+        raise ScanConversionError(
+            "Scan axis cannot be in collapsed_slice_dims as it would be eliminated"
+        )
+
+    non_collapsed_dims = [
+        d for d in range(operand.ndim) if d not in collapsed_slice_dims
+    ]
+    out_axis = dimension_numbers.offset_dims[non_collapsed_dims.index(axis)]
+
+    carry_init = None
+
+    def body_fn(carry, operand, start_indices_arg):
+        assert carry is None
+        operand_expanded = jnp.expand_dims(operand, axis)
+        expanded_slice_sizes = list(slice_sizes)
+        expanded_slice_sizes[axis] = 1
+        ans = lax.gather_p.bind(
+            operand_expanded, start_indices_arg,
+            dimension_numbers=dimension_numbers,
+            slice_sizes=tuple(expanded_slice_sizes),
+            indices_are_sorted=indices_are_sorted,
+            unique_indices=unique_indices,
+            mode=mode, fill_value=fill_value
+        )
+        return None, lax.squeeze(ans, [out_axis])
+
+    return carry_init, body_fn, [(0, ScanInfo(out_axis, out_prefill))], []
+
+register_rule(lax.gather_p, gather_rule)

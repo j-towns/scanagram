@@ -1010,3 +1010,173 @@ def test_sort_integer_values():
     def f(xs):
         return lax.sort(xs, dimension=1)
     test_util.check_scan(f, xs)
+
+def test_gather_basic():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5).astype("float32")
+    indices = jnp.array([[1], [2], [3]])
+
+    def f(operand):
+        # Gather from non-scan axis (axis 1), keeping scan axis intact
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(0, 2),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,)
+            ),
+            slice_sizes=(6, 1, 5)
+        )
+    test_util.check_scan(f, operand)
+
+def test_gather_with_prefill():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5).astype("float32")
+    prefill = rng.randn(3, 4, 5).astype("float32")
+    indices = jnp.array([[1], [2], [3]])
+
+    def f(operand):
+        operand = jnp.concatenate([prefill, operand])
+        result = lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(0, 2),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,)
+            ),
+            slice_sizes=(9, 1, 5)
+        )
+        return result[3:]
+    test_util.check_scan(f, operand)
+
+def test_gather_slice_non_scan_axis():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 8, 5).astype("float32")
+    indices = jnp.array([[1], [2], [3]])
+
+    def f(operand):
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(0, 2),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,)
+            ),
+            slice_sizes=(6, 1, 5)
+        )
+    test_util.check_scan(f, operand)
+
+def test_gather_scan_axis_error():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 5).astype("float32")
+    indices = jnp.array([[0], [1], [2]])
+
+    def f(operand):
+        # This should fail - trying to gather along scan axis (0)
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(1, 2),
+                collapsed_slice_dims=(0,),
+                start_index_map=(0,)
+            ),
+            slice_sizes=(1, 4, 5)
+        )
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, operand)
+
+def test_gather_start_indices_scan_error():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(4, 5).astype("float32")
+    indices = rng.randint(0, 4, size=(6, 1)).astype("int32")
+
+    def f(indices):
+        # This should fail - scanning over start_indices is not supported
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(1,),
+                collapsed_slice_dims=(0,),
+                start_index_map=(0,)
+            ),
+            slice_sizes=(1, 5)
+        )
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, indices)
+
+def test_gather_other_axis():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 8).astype("float32")
+    indices = jnp.array([[1], [2], [3]])
+
+    def f(operand):
+        # Move scan axis from 0 to 2, gather from axis 1, then move back
+        operand = jnp.moveaxis(operand, 0, 2)
+        result = lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(0, 2),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,)
+            ),
+            slice_sizes=(4, 1, 6)
+        )
+        return jnp.moveaxis(result, 2, 0)
+    test_util.check_scan(f, operand)
+
+def test_gather_multiple_indices():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 8, 10).astype("float32")
+    indices = jnp.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+
+    def f(operand):
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(0,),
+                collapsed_slice_dims=(1, 2),
+                start_index_map=(1, 2)
+            ),
+            slice_sizes=(6, 1, 1)
+        )
+    test_util.check_scan(f, operand)
+
+def test_gather_reordered_output_axis():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 4, 8).astype("float32")
+    indices = jnp.array([[1], [2], [3]])
+
+    def f(operand):
+        # Test case where output scan axis != input scan axis
+        # Input scan axis is 0, but gather output will have scan axis at position 1
+        # Use moveaxis to move it back to position 0
+        result = lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(1, 2),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,)
+            ),
+            slice_sizes=(6, 1, 8)
+        )
+        return jnp.moveaxis(result, 1, 0)
+    test_util.check_scan(f, operand)
+
+def test_gather_operand_batching_dims_not_supported():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(6, 5).astype("float32")
+    # Indices shape (6, 2, 1) to match operand_batching_dims=(0,)
+    indices = jnp.array([[[2], [3]], [[1], [4]], [[0], [2]], [[4], [1]], [[3], [0]], [[1], [2]]])
+
+    def f(operand):
+        # Test operand_batching_dims - should fail because batching is not supported
+        return lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(),
+                collapsed_slice_dims=(1,),
+                start_index_map=(1,),
+                operand_batching_dims=(0,),
+                start_indices_batching_dims=(0,)
+            ),
+            slice_sizes=(1, 1)
+        )
+    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, operand)
