@@ -1084,13 +1084,12 @@ def test_gather_scan_axis_error():
         )
     np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, operand)
 
-def test_gather_start_indices_scan_error():
+def test_gather_start_indices_scan():
     rng = np.random.RandomState(0)
     operand = rng.randn(4, 5).astype("float32")
     indices = rng.randint(0, 4, size=(6, 1)).astype("int32")
 
     def f(indices):
-        # This should fail - scanning over start_indices is not supported
         return lax.gather(
             operand, indices,
             lax.GatherDimensionNumbers(
@@ -1100,7 +1099,27 @@ def test_gather_start_indices_scan_error():
             ),
             slice_sizes=(1, 5)
         )
-    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, indices)
+    test_util.check_scan(f, indices)
+
+def test_gather_start_indices_scan_with_prefill():
+    rng = np.random.RandomState(0)
+    operand = rng.randn(4, 5).astype("float32")
+    indices = rng.randint(0, 4, size=(6, 1)).astype("int32")
+    prefill_indices = rng.randint(0, 4, size=(2, 1)).astype("int32")
+
+    def f(indices):
+        indices = jnp.concatenate([prefill_indices, indices])
+        result = lax.gather(
+            operand, indices,
+            lax.GatherDimensionNumbers(
+                offset_dims=(1,),
+                collapsed_slice_dims=(0,),
+                start_index_map=(0,)
+            ),
+            slice_sizes=(1, 5)
+        )
+        return result[2:]
+    test_util.check_scan(f, indices)
 
 def test_gather_other_axis():
     rng = np.random.RandomState(0)

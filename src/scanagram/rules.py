@@ -799,8 +799,13 @@ def gather_rule(
     [argnum], [axis], [prefill] = unzip_scanvars(inscanvars)
 
     if argnum == 1:  # Scanning over start_indices
-        raise ScanConversionError(
-            "Global scan over start_indices in gather is not supported"
+        # When only start_indices is scanned, we can use batch_rule
+        # as long as the scan axis doesn't interfere with gather semantics
+        return batch_rule(
+            lax.gather_p, inscanvars, operand, start_indices,
+            dimension_numbers=dimension_numbers, slice_sizes=slice_sizes,
+            indices_are_sorted=indices_are_sorted, unique_indices=unique_indices,
+            mode=mode, fill_value=fill_value
         )
 
     start_index_map = dimension_numbers.start_index_map
