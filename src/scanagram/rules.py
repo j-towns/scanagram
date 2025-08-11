@@ -798,9 +798,12 @@ def gather_rule(
 
     [argnum], [axis], [prefill] = unzip_scanvars(inscanvars)
 
-    if argnum == 1:  # Scanning over start_indices
-        # When only start_indices is scanned, we can use batch_rule
-        # as long as the scan axis doesn't interfere with gather semantics
+    if argnum == 1:
+        if axis == start_indices.ndim - 1:
+            raise ScanConversionError(
+                "Scanning over the index vector dim (the last axis of "
+                "start_indices) is not supported."
+            )
         return batch_rule(
             lax.gather_p, inscanvars, operand, start_indices,
             dimension_numbers=dimension_numbers, slice_sizes=slice_sizes,
