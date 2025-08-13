@@ -1,43 +1,19 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "scanagram"
-version = "0.1"
-description = "Rearrange deep scan-like functions in JAX"
+version = "0.1.0"
+description =  "Rearrange deep scan-like functions in JAX"
 authors = [
   { name="Jamie Townsend", email="jamiehntownsend@gmail.com" },
 ]
 readme = "README.md"
 requires-python = ">=3.10"
-classifiers = [
-  "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Topic :: Scientific/Engineering",
-]
-license = "Apache-2.0"
-license-files = ["LICENCE"]
 dependencies = [
-  "jax",
-  "numpy",
-]
-[project.urls]
-Source = "https://github.com/j-towns/scanagram"
-
-[project.optional-dependencies]
-test = [
-  "pytest",
-  "pytest-xdist",
+    "jax>=0.6.2",
+    "numpy>=2.2.6",
 ]
 
-[tool.hatch.envs.test]
-dependencies = [
-  "pytest"
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-xdist>=3.8.0",
 ]
-
-[[tool.hatch.envs.test.matrix]]
-python = ["3.10", "3.11", "3.12", "3.13"]
