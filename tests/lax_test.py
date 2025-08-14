@@ -398,6 +398,37 @@ def test_scan():
     xs = rng.randn(5, 2).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_scan_carry():
+    rng = np.random.RandomState(0)
+    init_carry = np.ones(2, "float32")
+    def body_fn(carry, x):
+        #return 1 + carry, None
+        _, ys = lax.scan(
+            lambda c, x: (c + x, c + x), 0, carry
+        )
+        return ys, None
+
+    def f(init_carry):
+        carry_out, _ = lax.scan(
+            body_fn, init_carry, jnp.arange(3)
+        )
+        return carry_out
+    test_util.check_scan(f, init_carry)
+
+#def test_scan_carry_no_xs():
+#    rng = np.random.RandomState(0)
+#    init_carry = np.ones(2, "float32")
+#    def body_fn(carry, x):
+#        _, ys = lax.scan(
+#            lambda c, x: (c + x, c + x), 0, carry
+#        )
+#        return ys
+#
+#    def f(init_carry):
+#        carry_out, _ = lax.scan(body_fn, init_carry, length=3)
+#        return carry_out
+#    test_util.check_scan(f, init_carry)
+
 def test_scan_prefill():
     rng = np.random.RandomState(0)
     init_carry = np.zeros(2, "float32")

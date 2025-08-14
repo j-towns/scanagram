@@ -6,6 +6,7 @@ from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
 from jax.core import Atom, AbstractValue
+from jax.tree_util import register_dataclass
 import jax.numpy as jnp
 
 from scanagram.util import safe_map
@@ -18,6 +19,7 @@ rules = {}
 def register_rule(p: Primitive, rule):
     rules[p] = rule
 
+@partial(register_dataclass, meta_fields=["axis"], data_fields=["prefill"])
 @dataclass
 class ScanInfo:
     axis: int

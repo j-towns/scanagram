@@ -3,7 +3,9 @@ import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun
 from jax.extend.core import primitives
+from jax import tree
 import jax._src.pjit
+from jax.core import ShapedArray
 # Backward compatibility with jax < 0.7
 jit_p = (
     jax._src.pjit.jit_p
@@ -240,63 +242,105 @@ def sort_rule(inscanvars, *operands, dimension, is_stable, num_keys):
     )
 register_rule(lax.sort_p, sort_rule)
 
+def _strip_scan_axis(aval):
+    assert type(aval) is ShapedArray
+    return ShapedArray(aval.shape[1:], aval.dtype)
+
 def scan_rule(
     inscanvars, *xs_avals, _split_transpose, jaxpr, length, linear, num_carry,
     num_consts, reverse, unroll
 ):
     argnums, axes, prefills = unzip_scanvars(inscanvars)
     xs_argnums = set(range(num_consts + num_carry, len(xs_avals)))
-    if not set(argnums) <= xs_argnums:
-        raise ScanConversionError(
-            "Global scan along an axis of a constant or carry in a call to "
-            "scan. This is not currently supported, but could be in future."
-        )
-    if not all(a == 0 for a in axes):
-        # TODO: Make this error more specific
-        raise ScanConversionError(
-            "Mismatch between global scan axis and lax scan axis."
-        )
-    if not all_equal(p.shape[0] for p in prefills):
-        raise ScanConversionError(
-            "Different length prefills detected in lax scan."
-        )
-
-    prefill_len = prefills[0].shape[0]
     prefill_map = dict(zip(argnums, prefills))
-    out_prefills = lax.scan_p.bind(
-        *[prefill_map[n] if n in prefill_map else
-          (a[:prefill_len] if n in xs_argnums else a)
-          for n, a in enumerate(xs_avals)
-          ], _split_transpose=_split_transpose, jaxpr=jaxpr,
-        length=prefill_len, linear=linear, num_carry=num_carry,
-        num_consts=num_consts, reverse=reverse, unroll=unroll
-    )
-    carry, out_prefills = (
-        tuple(out_prefills[:num_carry]), out_prefills[num_carry:]
-    )
-
+    prefill_len = prefills[0].shape[axes[0]]
     consts = xs_avals[:num_consts]
-    def body_fun(i_and_carry, *args):
-        i, old_carry = i_and_carry
-        args = tuple(
-            a if n in argnums else
-            lax.dynamic_index_in_dim(a, prefill_len + i, keepdims=False)
-            for n, a in enumerate(args)
+    if set(argnums) <= xs_argnums and all(a == 0 for a in axes):
+        if not all_equal(p.shape[0] for p in prefills):
+            raise ScanConversionError(
+                "Different length prefills detected in lax scan."
+            )
+        out_prefills = lax.scan_p.bind(
+            *[prefill_map[n] if n in prefill_map else
+              (a[:prefill_len] if n in xs_argnums else a)
+              for n, a in enumerate(xs_avals)
+              ], _split_transpose=_split_transpose, jaxpr=jaxpr,
+            length=prefill_len, linear=linear, num_carry=num_carry,
+            num_consts=num_consts, reverse=reverse, unroll=unroll
         )
-        new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
-            consts + old_carry + args[num_consts + num_carry:]
-        ))
-        carry = tuple(new_carry_and_x[:num_carry])
-        return (i + 1, carry), new_carry_and_x
+        carry, out_prefills = (
+            tuple(out_prefills[:num_carry]), out_prefills[num_carry:]
+        )
 
-    out_scanvars = [
-        (n, ScanInfo(0, p)) for n, p in zip(
-            range(num_carry, len(jaxpr.out_avals)),
-            out_prefills
+        def body_fun(i_and_carry, *args):
+            i, old_carry = i_and_carry
+            args = tuple(
+                a if n in argnums else
+                lax.dynamic_index_in_dim(a, prefill_len + i, keepdims=False)
+                for n, a in enumerate(args)
+            )
+            new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
+                consts + old_carry + args[num_consts + num_carry:]
+            ))
+            carry = tuple(new_carry_and_x[:num_carry])
+            return (i + 1, carry), new_carry_and_x
+
+        out_scanvars = [
+            (n, ScanInfo(0, p)) for n, p in zip(
+                range(num_carry, len(jaxpr.out_avals)),
+                out_prefills
+            )
+        ]
+        out_to_delete = list(range(num_carry))
+        return (0, carry), body_fun, out_scanvars, out_to_delete
+    elif all(a != 0 for a in axes if a in xs_argnums):
+        # Replace ShapedArrays with None so that they are treated as pytree
+        # structure rather than values.
+        xs_all = [
+            None if n in inscanvars else x for n, x in enumerate(xs_avals)
+        ]
+        consts, carry, xs = (
+            xs_all[:num_consts],
+            xs_all[num_consts:num_consts + num_carry],
+            xs_all[num_consts + num_carry:]
         )
-    ]
-    out_to_delete = list(range(num_carry))
-    return (0, carry), body_fun, out_scanvars, out_to_delete
+        consts_inscanvars = {
+            n: inscanvars[n] for n in inscanvars
+            if n < num_consts
+        }
+        carry_inscanvars = {
+            n: inscanvars[n] for n in inscanvars
+            if num_consts <= n and n < num_consts + num_carry
+        }
+        xs_inscanvars = {
+            n: ScanInfo(s.axis - 1, s.prefill) for n, s in inscanvars.items()
+            if num_consts + num_carry <= n
+        }
+        def prefill_local_body_fn(carry, xs):
+            carry, carry_inscanvars = carry
+            xs, xs_inscanvars = xs
+            inscanvars = consts_inscanvars | carry_inscanvars | xs_inscanvars
+            xs_all = consts + carry + xs
+            xs_all = [
+                _strip_scan_axis(a) if n in inscanvars else x for n, (a, x)
+                in enumerate(zip(xs_avals, xs_all))
+            ]
+            _, _, global_carry_init, outscanvars = core.make_carry_init(
+                jaxpr, inscanvars, xs_all
+            )
+            carry_outscanvars = {
+                n: outscanvars[n] for n in outscanvars if n < num_carry
+            }
+            ys_outscanvars = {
+                n: outscanvars[n] for n in outscanvars if n >= num_carry
+            }
+
+        return inner_carry_init, body_fn, out_scanvars, []
+    else:
+        raise ScanConversionError(
+            "Global scan cannot run along both a lax scan's input and the "
+            "carry/closed-over constants."
+        )
 register_rule(lax.scan_p, scan_rule)
 
 def broadcast_in_dim_rule(
@@ -878,5 +922,4 @@ def gather_rule(
         return None, lax.squeeze(ans, [out_axis])
 
     return carry_init, body_fn, [(0, ScanInfo(out_axis, out_prefill))], []
-
 register_rule(lax.gather_p, gather_rule)
