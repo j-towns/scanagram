@@ -3,7 +3,7 @@ import numpy as np
 from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun, ClosedJaxpr
 from jax.extend.core import primitives
-from jax._src.ad_checkpoint import remat_p
+from jax._src.ad_checkpoint import remat_p, name_p
 from jax import tree
 import jax._src.pjit
 from jax.core import ShapedArray
@@ -890,6 +890,10 @@ def remat_rule(inscanvars, *args, jaxpr, prevent_cse, differentiated, policy):
     inscanvars = [(n - num_consts, s) for n, s in inscanvars]
     return call_rule(inscanvars, closed_jaxpr, *args)
 register_rule(remat_p, remat_rule)
+
+def name_rule(inscanvars, arg, name):
+    return batch_rule(name_p, inscanvars, arg, name=name)
+register_rule(name_p, name_rule)
 
 def gather_rule(
     inscanvars, operand, start_indices, dimension_numbers, slice_sizes,

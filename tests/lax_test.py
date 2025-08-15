@@ -6,6 +6,7 @@ from jax import lax
 from jax import dtypes
 import jax
 import jax.numpy as jnp
+from jax.ad_checkpoint import checkpoint_name
 import numpy as np
 import numpy.testing as np_testing
 import pytest
@@ -793,12 +794,25 @@ def test_pjit_second_arg_scanned():
     ys = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
-def test_remat():
+def test_checkpoint():
     rng = np.random.RandomState(0)
 
     @jax.checkpoint
     def f(xs):
         return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
+    xs = rng.randn(2, 3, 4).astype("float32")
+    test_util.check_scan(f, xs)
+
+def test_checkpoint_name():
+    rng = np.random.RandomState(0)
+
+    @jax.checkpoint
+    def f(xs):
+        return lax.transpose(
+            checkpoint_name(
+                lax.transpose(xs, (1, 2, 0)), "x"
+            ), (2, 1, 0)
+        )
     xs = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
