@@ -401,33 +401,44 @@ def test_scan():
 def test_scan_carry():
     rng = np.random.RandomState(0)
     init_carry = np.ones(2, "float32")
-    def body_fn(carry, x):
-        #return 1 + carry, None
-        _, ys = lax.scan(
-            lambda c, x: (c + x, c + x), 0, carry
-        )
-        return ys, None
-
     def f(init_carry):
+        def body_fn(carry, x):
+            return carry + x, None
+
         carry_out, _ = lax.scan(
-            body_fn, init_carry, jnp.arange(3)
+            body_fn, init_carry, jnp.arange(6).reshape(3, 2)
         )
         return carry_out
     test_util.check_scan(f, init_carry)
 
-#def test_scan_carry_no_xs():
-#    rng = np.random.RandomState(0)
-#    init_carry = np.ones(2, "float32")
-#    def body_fn(carry, x):
-#        _, ys = lax.scan(
-#            lambda c, x: (c + x, c + x), 0, carry
-#        )
-#        return ys
-#
-#    def f(init_carry):
-#        carry_out, _ = lax.scan(body_fn, init_carry, length=3)
-#        return carry_out
-#    test_util.check_scan(f, init_carry)
+def test_scan_consts():
+    rng = np.random.RandomState(0)
+    init_carry = np.ones(2, "float32")
+    c = np.ones(2, "float32")
+    def f(c):
+        def body_fn(carry, x):
+            return carry, c + x
+
+        _, ys = lax.scan(
+            body_fn, init_carry, jnp.arange(6).reshape(3, 2)
+        )
+        return jnp.moveaxis(ys, 1, 0)
+    test_util.check_scan(f, c)
+
+def test_scan_non_zero_axis():
+     rng = np.random.RandomState(0)
+     init_carry = np.arange(3, dtype="float32")
+
+     def f(xs):
+         xs_moved = jnp.moveaxis(xs, 0, 1)
+         carry_out, ys = lax.scan(
+             lambda carry, x: (carry + 1, carry + x),
+             init_carry, xs_moved
+         )
+         return jnp.moveaxis(ys, 1, 0)
+
+     xs = rng.randn(3, 2).astype("float32")
+     test_util.check_scan(f, xs)
 
 def test_scan_prefill():
     rng = np.random.RandomState(0)

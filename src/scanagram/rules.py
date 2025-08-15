@@ -246,9 +246,16 @@ def sort_rule(inscanvars, *operands, dimension, is_stable, num_keys):
     )
 register_rule(lax.sort_p, sort_rule)
 
-def _strip_scan_axis(aval):
-    assert type(aval) is ShapedArray
-    return ShapedArray(aval.shape[1:], aval.dtype)
+def _strip_scan_axis(v):
+    return (
+        ShapedArray(v.shape[1:], v.dtype)
+        if type(v) is ShapedArray
+        else (
+            ScanInfo(v.axis - 1, v.prefill[0])
+            if type(v) is ScanInfo
+            else v[0]
+        )
+    )
 
 def scan_rule(
     inscanvars, *xs_avals, _split_transpose, jaxpr, length, linear, num_carry,
@@ -279,7 +286,7 @@ def scan_rule(
         def body_fun(i_and_carry, *args):
             i, old_carry = i_and_carry
             args = tuple(
-                a if n in argnums else
+                a if n < num_consts + num_carry or n in argnums else
                 lax.dynamic_index_in_dim(a, prefill_len + i, keepdims=False)
                 for n, a in enumerate(args)
             )
@@ -297,49 +304,82 @@ def scan_rule(
         ]
         out_to_delete = list(range(num_carry))
         return (0, carry), body_fun, out_scanvars, [], out_to_delete
-    elif all(a != 0 for a in axes if a in xs_argnums):
-        # Replace ShapedArrays with None so that they are treated as pytree
-        # structure rather than values.
-        xs_all = [
-            None if n in inscanvars else x for n, x in enumerate(xs_avals)
+    elif all(s.axis != 0 for n, s in inscanvars if n in xs_argnums):
+        xs_all = list(xs_avals)
+        # Example args to get local body_fns and scanvars
+        xs_stripped = [
+            x if n < num_consts + num_carry else _strip_scan_axis(x)
+            for n, x in enumerate(xs_all)
         ]
+        inscanvars_stripped = [
+            (n, s) if n < num_consts + num_carry else
+            (n, _strip_scan_axis(s)) for n, s in inscanvars
+        ]
+        body_fns, scanvars, _, _, _ = core.make_carry_init(
+            jaxpr, inscanvars_stripped, xs_stripped
+        )
+
+        inscanvars = [
+            (n, ScanInfo(s.axis - 1, s.prefill))
+            if n >= num_consts + num_carry
+            else (n, s) for n, s in inscanvars
+        ]
+        for n, s in inscanvars:
+            xs_all[n] = s
         consts, carry, xs = (
             xs_all[:num_consts],
             xs_all[num_consts:num_consts + num_carry],
             xs_all[num_consts + num_carry:]
         )
-        consts_inscanvars = {
-            n: inscanvars[n] for n in inscanvars
-            if n < num_consts
-        }
-        carry_inscanvars = {
-            n: inscanvars[n] for n in inscanvars
-            if num_consts <= n and n < num_consts + num_carry
-        }
-        xs_inscanvars = {
-            n: ScanInfo(s.axis - 1, s.prefill) for n, s in inscanvars.items()
-            if num_consts + num_carry <= n
-        }
-        def prefill_local_body_fn(carry, xs):
-            carry, carry_inscanvars = carry
-            xs, xs_inscanvars = xs
-            inscanvars = consts_inscanvars | carry_inscanvars | xs_inscanvars
-            xs_all = consts + carry + xs
-            xs_all = [
-                _strip_scan_axis(a) if n in inscanvars else x for n, (a, x)
-                in enumerate(zip(xs_avals, xs_all))
-            ]
-            _, _, global_carry_init, outscanvars = core.make_carry_init(
-                jaxpr, inscanvars, xs_all
-            )
-            carry_outscanvars = {
-                n: outscanvars[n] for n in outscanvars if n < num_carry
-            }
-            ys_outscanvars = {
-                n: outscanvars[n] for n in outscanvars if n >= num_carry
-            }
+        def prefill_local_body_fn(carry, x):
+            x_all = consts + carry + x
+            inscanvars_ = [(n, x_all[n]) for n, _ in inscanvars]
+            for n, _ in inscanvars:
+                x_all[n] = xs_stripped[n]
+            (
+                _, _, global_carry_init, outscanvars, outvals
+            ) = core.make_carry_init(jaxpr, inscanvars_, x_all)
+            carry_and_y = (len(outscanvars) + len(outvals)) * [None]
+            for n, v in outvals:
+                carry_and_y[n] = v
+            for n, s in outscanvars:
+                carry_and_y[n] = s
+            carry, y = carry_and_y[:len(carry)], carry_and_y[len(carry):]
+            return carry, (global_carry_init, y)
 
-        return inner_carry_init, body_fn, out_scanvars, []
+        carry, (global_carrys_init, ys) = lax.scan(
+            prefill_local_body_fn, carry, xs
+        )
+        carry_and_ys = carry + ys
+        outscanvars = [
+            (n, s)
+            if n < num_carry
+            else (n, ScanInfo(s.axis + 1, s.prefill))
+            for n, s in enumerate(carry_and_ys) if type(s) is ScanInfo
+        ]
+        outvals = [
+            (n, v) for n, v in enumerate(carry_and_ys)
+            if type(v) is not ScanInfo
+        ]
+
+        def global_body_fn(global_carrys, *xs_all):
+            consts, carry, xs = (
+                xs_all[:num_consts],
+                xs_all[num_consts:num_consts + num_carry],
+                xs_all[num_consts + num_carry:]
+            )
+            def local_body_fn(carry, x):
+                global_carry, x = x
+                global_carry, carry_and_y = core.body_fn(
+                    jaxpr, body_fns, scanvars, global_carry, consts + carry + x
+                )
+                carry, y = carry_and_y[:num_carry], carry_and_y[num_carry:]
+                return tuple(carry), (global_carry, tuple(y))
+            carry, (global_carrys, ys) = lax.scan(
+                local_body_fn, carry, (global_carrys, xs)
+            )
+            return global_carrys, carry + ys
+        return global_carrys_init, global_body_fn, outscanvars, outvals, []
     else:
         raise ScanConversionError(
             "Global scan cannot run along both a lax scan's input and the "
