@@ -154,7 +154,7 @@ def custom_scanagram_rule(
             (n, core.ScanInfo(out_info.axis, p)) for n, p in
             enumerate(out_prefill_flat)
         ]
-    return carry_init, body_fn_flat, out_info, []
+    return carry_init, body_fn_flat, out_info, [], []
 
 def custom_scanagram_impl(*args, call, rule, in_tree, out_tree):
     del rule, in_tree, out_tree

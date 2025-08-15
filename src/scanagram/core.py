@@ -143,6 +143,21 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None, args=None):
     def write(v: Var, val: Any) -> None:
         env[v] = val
 
+    def read(v: Atom) -> Any:
+        if isinstance(v, Literal):
+            return v.val
+        elif v in env:
+            if isinstance(env[v], Deleted):
+                raise ScanConversionError(
+                    "Using scan carry output is not supported"
+                )
+            else:
+                return env[v]
+        else:
+            raise ScanConversionError(
+                "Non-scanned variable could not be found in env"
+            )
+
     def maybe_read(v: Atom) -> Any:
         if isinstance(v, Literal):
             return v.val
@@ -172,11 +187,13 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None, args=None):
         in_vals = map(maybe_read, e.invars)
         if inscanvars:
             # TODO: Raise NotImplementedError if rule isn't defined
-            init, eqn_body_fn, outscanvars, to_delete = (
+            init, eqn_body_fn, outscanvars, outvals, to_delete = (
                 rules[e.primitive](inscanvars, *in_vals, **e.params)
             )
             to_delete = [e.outvars[i] for i in to_delete]
             map(write, to_delete, len(to_delete) * [deleted])
+            for i, v in outvals:
+                write(e.outvars[i], v)
             scanvars.update((e.outvars[i], a) for i, a in outscanvars)
             for i, s in outscanvars:
                 typecheck_prefill(s, e.outvars[i].aval)
@@ -196,8 +213,13 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars=None, args=None):
     else:
         outscanvars = tuple(
             (i, scanvars[v]) for i, v in enumerate(jaxpr.outvars)
+            if v in scanvars
         )
-        return eqn_body_fns, set(scanvars), carry_init, outscanvars
+        outvals = tuple(
+            (i, read(v)) for i, v in enumerate(jaxpr.outvars)
+            if v not in scanvars
+        )
+        return eqn_body_fns, set(scanvars), carry_init, outscanvars, outvals
 
 def make_scan(closed_jaxpr: ClosedJaxpr):
     eqn_body_fns, scanvars, carry_init = make_carry_init(closed_jaxpr)
