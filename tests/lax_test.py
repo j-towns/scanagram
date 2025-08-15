@@ -793,6 +793,15 @@ def test_pjit_second_arg_scanned():
     ys = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_remat():
+    rng = np.random.RandomState(0)
+
+    @jax.checkpoint
+    def f(xs):
+        return lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0))
+    xs = rng.randn(2, 3, 4).astype("float32")
+    test_util.check_scan(f, xs)
+
 def test_split():
     rng = np.random.RandomState(0)
 
