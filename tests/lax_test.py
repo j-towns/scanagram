@@ -756,6 +756,23 @@ def test_pjit():
     xs = rng.randn(2, 3, 4).astype("float32")
     test_util.check_scan(f, xs)
 
+def test_pjit_some_outvars_not_scanned():
+    rng = np.random.RandomState(0)
+
+    @jax.jit
+    def g(xs):
+        return (
+            lax.transpose(lax.transpose(xs, (1, 2, 0)), (2, 1, 0)),
+            jnp.ones(3)
+        )
+
+    def f(xs):
+        xs, ones = g(xs)
+        return xs + ones
+
+    xs = rng.randn(2, 3, 4).astype("float32")
+    test_util.check_scan(f, xs)
+
 def test_pjit_second_arg_scanned():
     rng = np.random.RandomState(0)
 
