@@ -331,6 +331,19 @@ def test_nary_prefill():
         return (ys * jnp.concatenate([prefill, xs]))[3:]
     test_util.check_scan(f, xs)
 
+def test_select_prefill_scalar_pred():
+    rng = np.random.RandomState(0)
+    xs = rng.randn(12, 3).astype("float32")
+    ys = rng.randn(15, 3).astype("float32")
+    prefill = rng.randn(3, 3).astype("float32")
+    def f(xs):
+        return lax.select(
+            jnp.array(True),
+            ys,
+            jnp.concatenate([prefill, xs])
+        )[3:]
+    test_util.check_scan(f, xs)
+
 def test_nary_prefill_batch():
     rng = np.random.RandomState(0)
     xs = rng.randn(12, 3).astype("float32")
