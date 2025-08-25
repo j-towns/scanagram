@@ -141,9 +141,19 @@ inputs `xs`, we have
 ```python
 jnp.all(g(xs) == lax.scan(f, init, xs)[1])
 ```
+One caveat not mentioned above is that there are some causal functions for which
+the state size grows with the length of the input sequence `xs`. To formally
+handle this possibility we really need to refine our definition by fixing
+the input length:
+A function `g` is scan-like (or causal) on inputs of length `T`
+if there exists `f` such that
+for all inputs `xs` with `xs.shape[0] == T`, we have
+```python
+jnp.all(g(xs) == lax.scan(f, init, xs)[1])
+```
 
-Here is an equivalent formulation: `g` is scan-like if for all integer `t` and
-for all input `xs`, we have
+This is equivalent to: `g` is scan-like on inputs of length `T` if for all
+integer `t <= T` and for all input `xs`, we have
 ```python
 jnp.all(g(xs)[:t] == g(xs[:t]))
 ```
@@ -218,3 +228,4 @@ large-scale end-to-end model. Thanks also to [Jacob
 Menick](https://github.com/jacobmenick) for encouragement. Thanks to
 [Alex Mansbridge](https://www.turing.ac.uk/people/former-doctoral-students/alex-mansbridge)
 and [Tom Bird](https://tom-bird.github.io/) for help with the name.
+
