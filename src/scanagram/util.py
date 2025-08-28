@@ -29,6 +29,14 @@ def safe_zip(*args):
     for arg in args[1:]:
         assert len(arg) == n, f'length mismatch: {list(map(len, args))}'
     return list(zip(*args))
+
+def unzip2(xys):
+    xs = []
+    ys = []
+    for x, y in xys:
+        xs.append(x)
+        ys.append(y)
+    return tuple(xs), tuple(ys)
 ###############################################################################
 
 def all_equal(xs):
@@ -38,13 +46,3 @@ def all_equal(xs):
     else:
         x, *xs = xs
         return all(y == x for y in xs)
-
-def unzip_scanvars(scanvars):
-    argnums = []
-    axes = []
-    prefills = []
-    for n, s in scanvars:
-        argnums.append(n)
-        axes.append(s.axis)
-        prefills.append(s.prefill)
-    return tuple(argnums), tuple(axes), tuple(prefills)

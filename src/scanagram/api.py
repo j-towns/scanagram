@@ -2,7 +2,7 @@ from jax import make_jaxpr
 from jax import tree
 
 from scanagram import core
-from scanagram.api_util import check_types
+from scanagram.api_util import check_types, check_lengths, check_prefill
 
 
 def as_scan(fun, example_xs):
@@ -70,8 +70,9 @@ def as_scan(fun, example_xs):
       ... )
       ...
     """
+    check_lengths(example_xs)
     jaxpr, out_shapes = make_jaxpr(fun, return_shape=True)(example_xs)
-    body_fun_flat, carry_init = core.make_scan(jaxpr)
+    body_fun_flat, carry_init, _ = core.make_scan(jaxpr)
     def body_fun(carry, xs):
         check_types(carry, carry_init, "carry", "carry_init")
         check_types(xs, example_xs, "xs", "example_xs", True)
@@ -80,3 +81,20 @@ def as_scan(fun, example_xs):
         check_types(out, out_shapes, "scan output", "example output", True)
         return carry, out
     return body_fun, carry_init
+
+def as_scan_with_prefill(fun, example_xs, prefills):
+    check_lengths(example_xs)
+    check_prefill(example_xs, prefills)
+    jaxpr, out_shapes = make_jaxpr(fun, return_shape=True)(example_xs)
+    body_fun_flat, carry_init, out_prefill = core.make_scan(
+        jaxpr, tree.leaves(prefills)
+    )
+    out_prefill = tree.unflatten(tree.structure(out_shapes), out_prefill)
+    def body_fun(carry, xs):
+        check_types(carry, carry_init, "carry", "carry_init")
+        check_types(xs, example_xs, "xs", "example_xs", True)
+        carry, out_flat = body_fun_flat(carry, tree.leaves(xs))
+        out = tree.unflatten(tree.structure(out_shapes), out_flat)
+        check_types(out, out_shapes, "scan output", "example output", True)
+        return carry, out
+    return body_fun, carry_init, out_prefill

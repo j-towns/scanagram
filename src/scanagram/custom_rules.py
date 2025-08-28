@@ -92,18 +92,20 @@ class ScanInfo:
     prefill: Any = None
 
 def custom_scanagram_rule(
-    inscanvars, *args_flat, call, rule, in_tree, out_tree
+    inscanvars, length, *prefills_flat, call, rule, in_tree, out_tree
 ):
-    argnums, axes, prefills_flat = util.unzip_scanvars(inscanvars)
-    args_flat = [ShapeDtypeStruct(a.shape, a.dtype) for a in args_flat]
-    consts, arg = tree.unflatten(in_tree, args_flat)
-    if not (set(argnums)
-            <= set(range(len(tree.leaves(consts)), len(args_flat)))):
+    argnums, axes = util.unzip2(inscanvars)
+    prefill_consts, prefill_arg = tree.unflatten(in_tree, prefills_flat)
+    _, arg = tree.unflatten(in_tree, [
+        ShapeDtypeStruct(a.shape, a.dtype) for a in call.in_avals
+    ])
+    num_consts = len(tree.leaves(prefill_consts))
+    if not (set(argnums) <= set(range(num_consts, len(prefills_flat)))):
         raise ScanConversionError(
             "Scanning over a variable which is closed over in a function "
             "with the custom_scanagram decorator is not supported"
         )
-    if set(argnums) != set(range(len(tree.leaves(consts)), len(args_flat))):
+    if argnums != tuple(range(num_consts, len(prefills_flat))):
         raise ScanConversionError(
             "All input arrays to custom_scanagram-decorated function must be "
             "scanned over."
@@ -114,13 +116,14 @@ def custom_scanagram_rule(
             "scanned along the same axis."
         )
     axis = axes[0]
-    assert util.all_equal(p.shape[axis] for p in prefills_flat)
-    prefill_len = prefills_flat[0].shape[axis]
+    assert util.all_equal(
+        p.shape[axis] for n, p in enumerate(prefills_flat)
+        if n in argnums
+    )
+    prefill_len = prefills_flat[argnums[0]].shape[axis]
     if prefill_len == 0:
-        prefills = None
-    else:
-        prefills = in_tree.children()[1].unflatten(prefills_flat)
-    InVarInfo = ScanInfo(axes[0], prefills)
+        prefill_arg = None
+    InVarInfo = ScanInfo(axes[0], prefill_arg)
     out_info, body_fn, carry_init = rule(InVarInfo, arg)
     def body_fn_flat(carry, *args_flat):
         _, arg = tree.unflatten(in_tree, args_flat)
@@ -137,10 +140,11 @@ def custom_scanagram_rule(
         out_prefill_shapes = map(list, (a.shape for a in call.out_avals))
         for i in range(len(out_prefill_shapes)):
             out_prefill_shapes[i][axis] = 0
-        out_info = [
-            (n, core.ScanInfo(out_info.axis, jnp.zeros(s, a.dtype)))
-            for n, (s, a) in enumerate(zip(out_prefill_shapes, call.out_avals))
+        out_prefill_flat = [
+            jnp.zeros(s, a.dtype)
+            for s, a in zip(out_prefill_shapes, call.out_avals)
         ]
+        out_info = [(n, out_info.axis) for n in range(len(call.out_avals))]
     else:
         if not tree.structure(out_info.prefill) == out_tree:
             raise ScanConversionError(
@@ -150,11 +154,8 @@ def custom_scanagram_rule(
             )
         # TODO: more detailed type checking here
         out_prefill_flat, _ = tree.flatten(out_info.prefill)
-        out_info = [
-            (n, core.ScanInfo(out_info.axis, p)) for n, p in
-            enumerate(out_prefill_flat)
-        ]
-    return carry_init, body_fn_flat, out_info, [], []
+        out_info = [(n, out_info.axis) for n in range(len(call.out_avals))]
+    return carry_init, body_fn_flat, out_info, out_prefill_flat, []
 
 def custom_scanagram_impl(*args, call, rule, in_tree, out_tree):
     del rule, in_tree, out_tree

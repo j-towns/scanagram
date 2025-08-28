@@ -65,7 +65,7 @@ def test_custom_scanagram_prefill():
         return g(xs)[3:]
 
     jax_test_util.check_close(jnp.array([27, 32]) , f(xs))
-    test_util.check_scan(f, xs)
+    test_util.check_scan_with_prefill(g, xs, prefill)
 
 def test_custom_scanagram_consts():
     xs_shape = (2,)
