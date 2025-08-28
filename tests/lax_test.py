@@ -337,12 +337,8 @@ def test_select_prefill_scalar_pred():
     ys = rng.randn(15, 3).astype("float32")
     prefill = rng.randn(3, 3).astype("float32")
     def f(xs):
-        return lax.select(
-            jnp.array(True),
-            ys,
-            jnp.concatenate([prefill, xs])
-        )[3:]
-    test_util.check_scan(f, xs)
+        return lax.select(True, ys, xs)
+    test_util.check_scan_with_prefill(f, xs, prefill)
 
 def test_nary_prefill_batch():
     rng = np.random.RandomState(0)
@@ -1237,7 +1233,9 @@ def test_gather_axis_error():
             ),
             slice_sizes=(1, 4, 5)
         )
-    np_testing.assert_raises(ScanConversionError, test_util.check_scan, f, operand)
+    np_testing.assert_raises(
+        ScanConversionError, test_util.check_scan, f, operand
+    )
 
 def test_gather_start_indices():
     rng = np.random.RandomState(0)

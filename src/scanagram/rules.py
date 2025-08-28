@@ -134,11 +134,11 @@ def nary_op_rule(op, inscanvars, length, *prefills, **kwargs):
     if not all(a == axis for a in axes[1:]):
         # TODO: more detail
         raise ScanConversionError(
-            "All scanned inputs to nary op must be scanned along same axis"
+            "All scanned inputs to nary op must be scanned along same axis."
         )
     if length == 1 and any(
-            p.shape[axis] != 1 for n, p in enumerate(prefills)
-        if n not in argnums
+        jnp.ndim(p) and p.shape[axis] != 1
+        for n, p in enumerate(prefills) if n not in argnums
     ):
         # TODO: more detail
         raise ScanConversionError(
@@ -150,26 +150,24 @@ def nary_op_rule(op, inscanvars, length, *prefills, **kwargs):
         raise ScanConversionError(
             f"Different length prefills encountered in {op}"
         )
-    if all(a.ndim == 0 or a.shape[axis] == 1
+    if all(jnp.ndim(a) == 0 or a.shape[axis] == 1
            for n, a in enumerate(prefills) if n not in argnums):
         return batch_rule(op, inscanvars, length, *prefills, **kwargs)
     prefill_len = prefills[argnums[0]].shape[axis]
     out_prefill = op.bind(*[
-        p
-        if n in argnums or p.shape[axis] == 1
+        p if n in argnums or not jnp.ndim(p) or jnp.shape(p)[axis] == 1
         else lax.slice_in_dim(p, 0, prefill_len, axis=axis)
         for n, p in enumerate(prefills)
     ], **kwargs)
-    init = 0
     def body_fn(counter, *args):
         args = [
-            a if i in argnums else lax.dynamic_index_in_dim(
-                a, prefill_len + counter, axis, False
-            ) for i, a in enumerate(args)
+            a if n in argnums or not jnp.ndim(a) or jnp.shape(a)[axis] == 1
+            else lax.dynamic_index_in_dim(a, counter, axis, False)
+            for n, a in enumerate(args)
         ]
         ans = op.bind(*args, **kwargs)
         return counter + 1, ans
-    return init, body_fn, [(0, axis)], [out_prefill], []
+    return prefill_len, body_fn, [(0, axis)], [out_prefill], []
 
 for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
