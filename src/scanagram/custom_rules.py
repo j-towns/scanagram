@@ -52,9 +52,6 @@ def _convert_constvars_jaxpr(jaxpr):
 
 ###############################################################################
 
-def _wrap_no_prefill_rule(rule):
-    pass
-
 class custom_scanagram:
     fun: Callable
     rule: Callable | None = None
