@@ -82,12 +82,12 @@ def as_scan(fun, example_xs):
         return carry, out
     return body_fun, carry_init
 
-def as_scan_with_prefill(fun, example_xs, prefills):
+def as_scan_with_prefill(fun, example_xs, in_prefills):
     check_lengths(example_xs)
-    check_prefill(example_xs, prefills)
+    check_prefill(example_xs, in_prefills)
     jaxpr, out_shapes = make_jaxpr(fun, return_shape=True)(example_xs)
     body_fun_flat, carry_init, out_prefill = core.make_scan(
-        jaxpr, tree.leaves(prefills)
+        jaxpr, tree.leaves(in_prefills)
     )
     out_prefill = tree.unflatten(tree.structure(out_shapes), out_prefill)
     def body_fun(carry, xs):

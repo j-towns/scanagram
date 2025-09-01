@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import lax
 from jax import jit, jvp, grad
 
-from scanagram import custom_scanagram, ScanInfo
+from scanagram import custom_scanagram
 from scanagram import jax_test_util
 from scanagram import test_util
 
@@ -24,48 +24,46 @@ def test_custom_scanagram():
         return jnp.array([xs[0], xs[0] + xs[1]])
 
     @f.def_scanagram
-    def f_scanagram_rule(scan_info, xs):
+    def f_scanagram_rule(in_axis, xs):
         assert type(xs) is ShapeDtypeStruct
         assert xs.shape == xs_shape
         assert xs.dtype == xs_dtype
-        carry_init = 0
         def body_fn(c, x):
             return c + x, c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, 0
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
 
 def test_custom_scanagram_prefill():
+    xs_shape = (5,)
     xs_dtype = jnp.dtype("int32")
 
-    xs = jnp.array([3, 5])
     prefill = jnp.array([7, 8, 9])
+    xs = jnp.concatenate([prefill, jnp.array([3, 5])])
 
     def g_ref(xs):
-        assert xs.shape == xs_shape
-        assert xs.dtype == xs_dtype
         return lax.scan(lambda c, x: (c + x, c + x), 0, xs)[1]
 
     @custom_scanagram
     def g(xs):
         return jnp.array([7, 15, 24, 27, 32])
 
-    @g.def_scanagram
-    def g_scanagram_rule(scan_info, xs):
+    @g.def_scanagram_with_prefill
+    def g_scanagram_rule(in_axis, xs):
         assert type(xs) is ShapeDtypeStruct
+        assert xs.shape == xs_shape
         assert xs.dtype == xs_dtype
+        assert in_axis == 0
         carry_init = 24
+        def init_fn(xs_prefill):
+            return 24, jnp.array([7, 15, 24])
         def body_fn(c, x):
             return c + x, c + x
-        return ScanInfo(0, jnp.array([7, 15, 24])), body_fn, carry_init
+        return 0, init_fn, body_fn
 
-    def f(xs):
-        xs = jnp.concatenate([prefill, xs])
-        return g(xs)[3:]
-
-    jax_test_util.check_close(jnp.array([27, 32]) , f(xs))
-    test_util.check_scan_with_prefill(g, xs, prefill)
+    jax_test_util.check_close(g(xs), g_ref(xs))
+    test_util.check_scan_with_prefill(g, xs[3:], prefill)
 
 def test_custom_scanagram_consts():
     xs_shape = (2,)
@@ -91,7 +89,7 @@ def test_custom_scanagram_consts():
         carry_init = 0
         def body_fn(c, x):
             return c + x, 5 + c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -124,7 +122,7 @@ def test_custom_scanagram_in_pytree():
         def body_fn(c, x):
             x = x['xs']
             return c + x, c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -152,7 +150,7 @@ def test_custom_scanagram_out_pytree():
         carry_init = 0
         def body_fn(c, x):
             return c + x, {'ys': c + x}
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     test_util.check_scan(f, xs)
@@ -180,7 +178,7 @@ def test_custom_scanagram_jit():
         carry_init = 0
         def body_fn(c, x):
             return c + x, c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     f = jit(f)
     jax_test_util.check_close(f_ref(xs), f(xs))
@@ -213,7 +211,7 @@ def test_custom_scanagram_jvp():
         def body_fn(c, x):
             x = x ** 2
             return c + x, c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     jax_test_util.check_close(
@@ -274,7 +272,7 @@ def test_custom_scanagram_grad():
         def body_fn(c, x):
             x = x ** 2
             return c + x, c + x
-        return ScanInfo(0), body_fn, carry_init
+        return 0, body_fn, carry_init
 
     jax_test_util.check_close(f_ref(xs), f(xs))
     jax_test_util.check_close(

@@ -1,6 +1,5 @@
-from typing import Any
-from dataclasses import dataclass
 import functools
+from functools import partial
 from typing import Callable
 
 from jax.extend.core import Primitive, ClosedJaxpr, jaxpr_as_fun, Jaxpr
@@ -16,8 +15,10 @@ import jax.numpy as jnp
 
 from scanagram import util
 from scanagram.core import ScanConversionError, register_rule
-from scanagram import core
 
+
+# TODO: Different error type for the errors which pertain specifically to
+# custom_scanagram and don't occur during conversion.
 
 map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip
@@ -51,17 +52,31 @@ def _convert_constvars_jaxpr(jaxpr):
 
 ###############################################################################
 
-
 class custom_scanagram:
     fun: Callable
     rule: Callable | None = None
+    _use_prefill: bool | None = None
 
     def __init__(self, fun):
         functools.update_wrapper(self, fun)
         self.fun = fun
 
     def def_scanagram(self, rule):
+        if self.rule is not None:
+            raise ScanConversionError(
+                "Cannot define a custom scanagram rule more than once."
+            )
         self.rule = rule
+        self._use_prefill = False
+        return rule
+
+    def def_scanagram_with_prefill(self, rule):
+        if self.rule is not None:
+            raise ScanConversionError(
+                "Cannot define a custom scanagram rule more than once."
+            )
+        self.rule = rule
+        self._use_prefill = True
         return rule
 
     def __call__(self, arg):
@@ -82,30 +97,32 @@ class custom_scanagram:
             )
         out_flat = custom_scanagram_p.bind(
             *consts, *arg_flat, call=closed_call, rule=self.rule,
-            in_tree=in_structure, out_tree=out_structure
+            in_tree=in_structure, out_tree=out_structure,
+            use_prefill=self._use_prefill
         )
         return tree.unflatten(out_structure, out_flat)
 
-@dataclass
-class ScanInfo:
-    axis: int
-    prefill: Any = None
+def empty_prefill(axis, aval):
+    shape = list(aval.shape)
+    shape[axis] = 0
+    return jnp.zeros(shape, aval.dtype)
 
 def custom_scanagram_rule(
-    inscanvars, length, *prefills_flat, call, rule, in_tree, out_tree
+    inscanvars, *avals_flat, call, rule, in_tree, out_tree, use_prefill
 ):
     argnums, axes = util.unzip2(inscanvars)
-    prefill_consts, prefill_arg = tree.unflatten(in_tree, prefills_flat)
-    _, arg = tree.unflatten(in_tree, [
-        ShapeDtypeStruct(a.shape, a.dtype) for a in call.in_avals
+    assert avals_flat == tuple(call.in_avals)
+    consts, arg = tree.unflatten(in_tree, [
+        ShapeDtypeStruct(a.shape, a.dtype) for a in avals_flat
     ])
-    num_consts = len(tree.leaves(prefill_consts))
-    if not (set(argnums) <= set(range(num_consts, len(prefills_flat)))):
+    num_consts = len(tree.leaves(consts))
+    xs_argnums = tuple(range(num_consts, len(avals_flat)))
+    if not set(argnums) <= set(xs_argnums):
         raise ScanConversionError(
             "Scanning over a variable which is closed over in a function "
-            "with the custom_scanagram decorator is not supported"
+            "with the custom_scanagram decorator is not supported."
         )
-    if argnums != tuple(range(num_consts, len(prefills_flat))):
+    if argnums != xs_argnums:
         raise ScanConversionError(
             "All input arrays to custom_scanagram-decorated function must be "
             "scanned over."
@@ -117,54 +134,53 @@ def custom_scanagram_rule(
         )
     axis = axes[0]
     assert util.all_equal(
-        p.shape[axis] for n, p in enumerate(prefills_flat)
-        if n in argnums
+        a.shape[axis] for n, a in enumerate(avals_flat) if n in argnums
     )
-    prefill_len = prefills_flat[argnums[0]].shape[axis]
-    if prefill_len == 0:
-        prefill_arg = None
-    InVarInfo = ScanInfo(axes[0], prefill_arg)
-    out_info, body_fn, carry_init = rule(InVarInfo, arg)
+    if use_prefill:
+        out_axis, init_fn, body_fn = rule(axis, arg)
+    else:
+        out_axis, body_fn, carry_init = rule(axis, arg)
+    def init_fn_flat(*prefills_flat):
+        if use_prefill:
+            _, arg_prefill = tree.unflatten(in_tree, prefills_flat)
+            carry_init_, out_prefill = init_fn(arg_prefill)
+            out_prefill_flat, out_structure = tree.flatten(out_prefill)
+            if not out_structure == out_tree:
+                raise ScanConversionError(
+                    "Output prefill from custom scanagram rule has a pytree "
+                    "structure which doesn't match that of the custom_scanagram-"
+                    "decorated function."
+                )
+        else:
+            carry_init_ = carry_init
+            out_prefill_flat = map(
+                partial(empty_prefill, out_axis), call.out_avals
+            )
+        return carry_init_, out_prefill_flat
     def body_fn_flat(carry, *args_flat):
         _, arg = tree.unflatten(in_tree, args_flat)
         carry_new, out = body_fn(carry, arg)
-        if not tree.structure(out) == out_tree:
+        out_flat, out_structure = tree.flatten(out)
+        if not out_structure == out_tree:
             raise ScanConversionError(
                 "Output of body_fn provided in custom_scanagram rule must "
                 "have the same pytree structure as the output of the "
                 "custom_scanagram-decorated function."
             )
         # TODO: more detailed type checking here
-        return carry_new, tree.leaves(out)
-    if out_info.prefill is None:
-        out_prefill_shapes = map(list, (a.shape for a in call.out_avals))
-        for i in range(len(out_prefill_shapes)):
-            out_prefill_shapes[i][axis] = 0
-        out_prefill_flat = [
-            jnp.zeros(s, a.dtype)
-            for s, a in zip(out_prefill_shapes, call.out_avals)
-        ]
-        out_info = [(n, out_info.axis) for n in range(len(call.out_avals))]
-    else:
-        if not tree.structure(out_info.prefill) == out_tree:
-            raise ScanConversionError(
-                "Output prefill from custom_scanagram rule must have same "
-                "pytree structure as the output of the "
-                "custom_scanagram-decorated function."
-            )
-        # TODO: more detailed type checking here
-        out_prefill_flat, _ = tree.flatten(out_info.prefill)
-        out_info = [(n, out_info.axis) for n in range(len(call.out_avals))]
-    return carry_init, body_fn_flat, out_info, out_prefill_flat, []
+        return carry_new, out_flat
+    out_info = [(n, out_axis) for n in range(len(call.out_avals))]
+    return out_info, [], init_fn_flat, body_fn_flat
 
-def custom_scanagram_impl(*args, call, rule, in_tree, out_tree):
+def custom_scanagram_impl(*args, call, rule, in_tree, out_tree, use_prefill):
     del rule, in_tree, out_tree
     return jaxpr_as_fun(call)(*args)
 
 def custom_scanagram_abstract_eval(*in_avals, call, **kwargs):
     return call.out_avals
 
-def custom_scanagram_jvp(primals, tangents, *, call, rule, in_tree, out_tree):
+def custom_scanagram_jvp(primals, tangents, *, call, rule, in_tree, out_tree,
+                         use_prefill):
     jvp_fun = ad.jvp(wrap_init(
         jaxpr_as_fun(call),
         debug_info=debug_info('jvp', jaxpr_as_fun(call), primals, {})
