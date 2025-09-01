@@ -717,13 +717,13 @@ def test_dot_general_lhs_batch_prefill():
 def test_dot_general_lhs_non_batch():
     rng = np.random.RandomState(0)
     x, y = (
-        rng.randn(6, 3, 4).astype("float32"),
+        rng.randn(5, 3, 4).astype("float32"),
         rng.randn(6, 3, 4).astype("float32")
     )
     def f(x):
-        return lax.dot_general(
-            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
-        )
+        return jnp.moveaxis(lax.dot_general(
+            x, y, (([2], [2]), ([1], [1]))
+        ), 1, 0)
     test_util.check_scan(f, x)
 
 def test_dot_general_lhs_non_batch_prefill():
@@ -734,9 +734,9 @@ def test_dot_general_lhs_non_batch_prefill():
     )
     prefill = rng.randn(2, 3, 4).astype("float32")
     def f(x):
-        return lax.dot_general(
-            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
-        )
+        return jnp.moveaxis(lax.dot_general(
+            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([0], [1]))
+        ), 1, 0)
     test_util.check_scan_with_prefill(f, x, prefill)
 
 def test_dot_general_rhs_batch():
@@ -766,11 +766,23 @@ def test_dot_general_rhs_non_batch():
         rng.randn(6, 3, 4).astype("float32"),
         rng.randn(4, 3, 4).astype("float32")
     )
+    def f(y):
+        return jnp.moveaxis(lax.dot_general(
+            x, y, (([2], [2]), ([1], [1]))
+        ), 2, 0)
+    test_util.check_scan(f, y)
+
+def test_dot_general_rhs_non_batch_prefill():
+    rng = np.random.RandomState(0)
+    x, y = (
+        rng.randn(6, 3, 4).astype("float32"),
+        rng.randn(4, 3, 4).astype("float32")
+    )
     prefill = rng.randn(2, 3, 4).astype("float32")
     def f(y):
-        return lax.dot_general(
-            jnp.moveaxis(x, 0, 1), y, (([2], [2]), ([1], [0]))
-        )
+        return jnp.moveaxis(lax.dot_general(
+            x, y, (([2], [2]), ([1], [1]))
+        ), 2, 0)
     test_util.check_scan_with_prefill(f, y, prefill)
 
 def test_reshape_pre():

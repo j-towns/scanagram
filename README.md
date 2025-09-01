@@ -84,18 +84,15 @@ def generate(rng, length):
     return xs
 ```
 
-In order to handle prefill/prompting, we need to wrap `g` in a function which
-concatenates the prompt to the input, and slices off the unneeded section at
-the beginning of the output. This wrapped version of `g`, which we'll call
-`g_prompted`, is still scan-like and thus can be transformed by Scanagram:
+In order to handle prefill/prompting, we need to use
+`scanagram.as_scan_with_prefill`, which accepts an extra `in_prefills` argument
+and returns the output prefills, as well as the `body_fun` and `carry_init`
+returned by `scanagram.as_scan`:
 ```python
 @partial(jax.jit, static_argnums=2)
 def generate(rng, prompt, length):
-    def g_prompted(xs):
-        return g(jnp.concat([prompt, xs]))[len(prompt):]
-
     example_xs = jnp.zeros((length, *xs_shape), xs_dtype)
-    f, carry_init = scanagram.as_scan(g_prompted, example_xs)
+    f, carry_init, out_prefill = scanagram.as_scan(g, example_xs, prompt)
     rngs = jax.random.split(rng, length)
 
     def gen_step(carry_and_x, rng):

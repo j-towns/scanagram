@@ -4,9 +4,7 @@ from jax import numpy as jnp, lax
 from jax.extend.core import jaxpr_as_fun, ClosedJaxpr
 from jax.extend.core import primitives
 from jax._src.ad_checkpoint import remat_p, name_p
-from jax import tree
 import jax._src.pjit
-from jax.core import ShapedArray
 # Backward compatibility with jax < 0.7
 jit_p = (
     jax._src.pjit.jit_p
@@ -24,13 +22,16 @@ zip = safe_zip
 
 # Used when op is expressible as a (v)map over the scanned axis of all scanned
 # input variables
-def batch_rule(op, inscanvars, length, *prefills, **bind_params):
+def batch_rule(op, inscanvars, *in_avals, **bind_params):
     argnums, axes = unzip2(inscanvars)
     assert all_equal(axes)
     axis = axes[0]
-    assert all_equal(prefills[n].shape[axis] for n, p in inscanvars)
-    out_prefill = op.bind(*prefills, **bind_params)
-    carry_init = None
+
+    def init_fn(*prefills):
+        assert all_equal(prefills[n].shape[axis] for n, p in inscanvars)
+        out_prefill = op.bind(*prefills, **bind_params)
+        out_prefill = out_prefill if op.multiple_results else (out_prefill,)
+        return None, out_prefill
 
     def body_fn(carry, *args):
         assert carry is None
@@ -43,12 +44,12 @@ def batch_rule(op, inscanvars, length, *prefills, **bind_params):
         else:
             return None, lax.squeeze(ans, [axis])
 
-    out_scanvars = tuple(
-        ((i, axis) for i in range(len(out_prefill))) if op.multiple_results
-        else [(0, axis)]
-    )
-    out_prefill = out_prefill if op.multiple_results else (out_prefill,)
-    return carry_init, body_fn, out_scanvars, out_prefill, []
+    if op.multiple_results:
+        abstract_res, _ = op.abstract_eval(*in_avals, **bind_params)
+        out_scanvars = [(i, axis) for i in range(len(abstract_res))]
+    else:
+        out_scanvars = [(0, axis)]
+    return out_scanvars, [], init_fn, body_fn
 
 
 nary_ops = [
@@ -128,7 +129,7 @@ nary_ops = [
     lax.zeta_p,
 ]
 
-def nary_op_rule(op, inscanvars, length, *prefills, **kwargs):
+def nary_op_rule(op, inscanvars, *in_avals, **kwargs):
     argnums, axes = unzip2(inscanvars)
     axis = axes[0]
     if not all(a == axis for a in axes[1:]):
@@ -136,38 +137,39 @@ def nary_op_rule(op, inscanvars, length, *prefills, **kwargs):
         raise ScanConversionError(
             "All scanned inputs to nary op must be scanned along same axis."
         )
+    length = in_avals[argnums[0]].shape[axis]
     if length == 1 and any(
-        jnp.ndim(p) and p.shape[axis] != 1
-        for n, p in enumerate(prefills) if n not in argnums
+        a.ndim and a.shape[axis] != 1
+        for n, a in enumerate(in_avals) if n not in argnums
     ):
         # TODO: more detail
         raise ScanConversionError(
             "Broadcasting scanned variable along scanned axis is not "
             "supported"
         )
-    if not all_equal(p.shape[axis] for n, p in enumerate(prefills)
+    if not all_equal(a.shape[axis] for n, a in enumerate(in_avals)
                      if n in argnums):
         raise ScanConversionError(
             f"Different length prefills encountered in {op}"
         )
     if all(jnp.ndim(a) == 0 or a.shape[axis] == 1
-           for n, a in enumerate(prefills) if n not in argnums):
-        return batch_rule(op, inscanvars, length, *prefills, **kwargs)
-    prefill_len = prefills[argnums[0]].shape[axis]
-    out_prefill = op.bind(*[
-        p if n in argnums or not jnp.ndim(p) or jnp.shape(p)[axis] == 1
-        else lax.slice_in_dim(p, 0, prefill_len, axis=axis)
-        for n, p in enumerate(prefills)
-    ], **kwargs)
+           for n, a in enumerate(in_avals) if n not in argnums):
+        return batch_rule(op, inscanvars, *in_avals, **kwargs)
+    def init_fn(*prefills):
+        prefill_len = prefills[argnums[0]].shape[axis]
+        return prefill_len, [op.bind(*[
+            p if n in argnums or not jnp.ndim(p) or jnp.shape(p)[axis] == 1
+            else lax.slice_in_dim(p, 0, prefill_len, axis=axis)
+            for n, p in enumerate(prefills)
+        ], **kwargs)]
     def body_fn(counter, *args):
         args = [
             a if n in argnums or not jnp.ndim(a) or jnp.shape(a)[axis] == 1
             else lax.dynamic_index_in_dim(a, counter, axis, False)
             for n, a in enumerate(args)
         ]
-        ans = op.bind(*args, **kwargs)
-        return counter + 1, ans
-    return prefill_len, body_fn, [(0, axis)], [out_prefill], []
+        return counter + 1, op.bind(*args, **kwargs)
+    return [(0, axis)], [], init_fn, body_fn
 
 for op in nary_ops:
     register_rule(op, partial(nary_op_rule, op))
@@ -183,20 +185,20 @@ reduce_ops = [
     lax.reduce_sum_p,
     lax.reduce_xor_p,
 ]
-def reduce_rule(op, inscanvars, length, xs_aval, axes):
+def reduce_rule(op, inscanvars, xs_aval, axes):
     _, [inscan_axis] = unzip2(inscanvars)
     if inscan_axis in set(axes):
         raise ScanConversionError(
             "Global scan operating along reduce axis is not supported."
         )
-    return batch_rule(op, inscanvars, length, xs_aval, axes=axes)
+    return batch_rule(op, inscanvars, xs_aval, axes=axes)
 for op in reduce_ops:
     register_rule(op, partial(reduce_rule, op))
 
 def reduce_p_rule(
-    inscanvars, length, *operands_and_inits, computation, dimensions, jaxpr
+    inscanvars, *in_avals, computation, dimensions, jaxpr
 ):
-    num_operands = len(operands_and_inits) // 2
+    num_operands = len(in_avals) // 2
     argnums, axes = unzip2(inscanvars)
     if any(n >= num_operands for n in argnums):
         raise ScanConversionError(
@@ -207,23 +209,23 @@ def reduce_p_rule(
             "Global scan operating along reduce axis is not supported."
         )
     return batch_rule(
-        lax.reduce_p, inscanvars, length, *operands_and_inits,
+        lax.reduce_p, inscanvars, *in_avals,
         computation=computation, dimensions=dimensions, jaxpr=jaxpr
     )
 register_rule(lax.reduce_p, reduce_p_rule)
 
-def rev_rule(inscanvars, length, operand, dimensions):
+def rev_rule(inscanvars, operand_aval, dimensions):
     (_, inscan_axis), = inscanvars
     if inscan_axis in set(dimensions):
         raise ScanConversionError(
             "Global scan along a reversed axis is not supported."
         )
     return batch_rule(
-        lax.rev_p, inscanvars, length, operand, dimensions=dimensions
+        lax.rev_p, inscanvars, operand_aval, dimensions=dimensions
     )
 register_rule(lax.rev_p, rev_rule)
 
-def sort_rule(inscanvars, length, *operands, dimension, is_stable, num_keys):
+def sort_rule(inscanvars, *in_avals, dimension, is_stable, num_keys):
     argnums, axes = unzip2(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
@@ -237,47 +239,35 @@ def sort_rule(inscanvars, length, *operands, dimension, is_stable, num_keys):
         )
 
     return batch_rule(
-        lax.sort_p, inscanvars, length, *operands, dimension=dimension,
+        lax.sort_p, inscanvars, *in_avals, dimension=dimension,
         is_stable=is_stable, num_keys=num_keys
     )
 register_rule(lax.sort_p, sort_rule)
 
-def _strip_scan_axis(v):
-    return (
-        ShapedArray(v.shape[1:], v.dtype)
-        if type(v) is ShapedArray
-        else (
-            ScanInfo(v.axis - 1, v.prefill[0])
-            if type(v) is ScanInfo
-            else v[0]
-        )
-    )
-
 def scan_rule(
-    inscanvars, length_, *prefills, _split_transpose, jaxpr, length, linear,
+    inscanvars, *in_avals, _split_transpose, jaxpr, length, linear,
     num_carry, num_consts, reverse, unroll
 ):
     argnums, axes = unzip2(inscanvars)
-    xs_argnums = set(range(num_consts + num_carry, len(prefills)))
-    prefill_len = jnp.shape(prefills[argnums[0]])[axes[0]]
-    consts = prefills[:num_consts]
+    xs_argnums = set(range(num_consts + num_carry, len(in_avals)))
     if set(argnums) <= xs_argnums and all(a == 0 for a in axes):
-        if not all_equal(
-                p.shape[0] for n, p in enumerate(prefills) if n in argnums
-        ):
-            raise ScanConversionError(
-                "Different length prefills detected in lax scan."
+        def init_fn(*prefills):
+            if not all_equal(
+                    p.shape[0] for n, p in enumerate(prefills) if n in argnums
+            ):
+                raise ScanConversionError(
+                    "Different length prefills detected in lax scan."
+                )
+            prefill_len = jnp.shape(prefills[argnums[0]])[axes[0]]
+            out_prefills = lax.scan_p.bind(
+                *[p[:prefill_len] if n in xs_argnums and n not in argnums
+                  else p
+                  for n, p in enumerate(prefills)],
+                _split_transpose=_split_transpose, jaxpr=jaxpr,
+                length=prefill_len, linear=linear, num_carry=num_carry,
+                num_consts=num_consts, reverse=reverse, unroll=unroll
             )
-        out_prefills = lax.scan_p.bind(
-            *[p[:prefill_len] if n in xs_argnums and n not in argnums else p
-              for n, p in enumerate(prefills)],
-            _split_transpose=_split_transpose, jaxpr=jaxpr,
-            length=prefill_len, linear=linear, num_carry=num_carry,
-            num_consts=num_consts, reverse=reverse, unroll=unroll
-        )
-        carry, out_prefills = (
-            tuple(out_prefills[:num_carry]), tuple(out_prefills[num_carry:])
-        )
+            return (prefill_len, tuple(out_prefills[:num_carry])), out_prefills
 
         def body_fun(i_and_carry, *args):
             i, old_carry = i_and_carry
@@ -287,53 +277,45 @@ def scan_rule(
                 for n, a in enumerate(args)
             )
             new_carry_and_x = jaxpr_as_fun(jaxpr)(*(
-                consts + old_carry + args[num_consts + num_carry:]
+                args[:num_consts] + old_carry + args[num_consts + num_carry:]
             ))
             carry = tuple(new_carry_and_x[:num_carry])
             return (i + 1, carry), new_carry_and_x
 
         out_scanvars = [(n, 0) for n in range(num_carry, len(jaxpr.out_avals))]
         out_to_delete = tuple(range(num_carry))
-        return (
-            (prefill_len, carry), body_fun, out_scanvars, carry + out_prefills,
-            out_to_delete
-        )
+        return out_scanvars, out_to_delete, init_fn, body_fun
     elif all(axis != 0 for n, axis in inscanvars if n in xs_argnums):
-        xs_all = list(prefills)
-        # Example args to get local body_fns and scanvars
-        xs_stripped = [
-            x if n < num_consts + num_carry else x[0]
-            for n, x in enumerate(xs_all)
-        ]
         inscanvars_stripped = [
-            (n, axis) if n < num_consts + num_carry else
-            (n, axis - 1) for n, axis in inscanvars
+            (n, axis - 1) if n in xs_argnums else (n, axis)
+            for n, axis in inscanvars
         ]
-        body_fns, scanvars, _, outscanvars, _ = core.make_carry_init(
-            jaxpr, inscanvars_stripped, xs_stripped
+        scanvars, outscanvars = core.compute_scanvars(
+            jaxpr, inscanvars_stripped
         )
-
-        consts, carry, xs = (
-            xs_all[:num_consts],
-            xs_all[num_consts:num_consts + num_carry],
-            xs_all[num_consts + num_carry:]
-        )
-        def prefill_local_body_fn(carry, x):
-            x_all = consts + carry + x
-            (
-                _, _, global_carry_init, _, outvals
-            ) = core.make_carry_init(jaxpr, inscanvars_stripped, x_all)
-            carry, y = outvals[:len(carry)], outvals[len(carry):]
-            return carry, (global_carry_init, y)
-
-        carry, (global_carrys_init, ys) = lax.scan(
-            prefill_local_body_fn, carry, xs
-        )
-        out_prefill = carry + ys
         outscanvars = [
-            (n, axis) if n < num_carry else (n, axis + 1)
+            (n, axis + 1) if n >= num_carry else (n, axis)
             for n, axis in outscanvars
         ]
+        def global_init_fn(*prefills):
+            consts, carry, xs = (
+                prefills[:num_consts],
+                prefills[num_consts:num_consts + num_carry],
+                prefills[num_consts + num_carry:]
+            )
+            def prefill_local_body_fn(carry, x):
+                x_all = consts + carry + x
+                global_carry_init, outvals = core.make_carry_init(
+                    jaxpr, scanvars, x_all
+                )
+                carry, y = outvals[:len(carry)], outvals[len(carry):]
+                return tuple(carry), (global_carry_init, y)
+
+            carry, (global_carrys_init, ys) = lax.scan(
+                prefill_local_body_fn, carry, xs
+            )
+            out_prefill = carry + tuple(ys)
+            return global_carrys_init, out_prefill
 
         def global_body_fn(global_carrys, *xs_all):
             consts, carry, xs = (
@@ -343,8 +325,9 @@ def scan_rule(
             )
             def local_body_fn(carry, x):
                 global_carry, x = x
+                x_all = consts + carry + x
                 global_carry, carry_and_y = core.body_fn(
-                    jaxpr, body_fns, scanvars, global_carry, consts + carry + x
+                    jaxpr, scanvars, global_carry, x_all
                 )
                 carry, y = carry_and_y[:num_carry], carry_and_y[num_carry:]
                 return tuple(carry), (global_carry, tuple(y))
@@ -352,7 +335,7 @@ def scan_rule(
                 local_body_fn, carry, (global_carrys, xs)
             )
             return global_carrys, carry + ys
-        return global_carrys_init, global_body_fn, outscanvars, out_prefill, []
+        return outscanvars, [], global_init_fn, global_body_fn
     else:
         raise ScanConversionError(
             "Global scan cannot run along both a lax scan's input and the "
@@ -361,39 +344,42 @@ def scan_rule(
 register_rule(lax.scan_p, scan_rule)
 
 def broadcast_in_dim_rule(
-    inscanvars, length, operand, shape, broadcast_dimensions, sharding
+    inscanvars, operand_aval, shape, broadcast_dimensions, sharding
 ):
-    [_], [inscan_axis] = unzip2(inscanvars)
+    (_, inscan_axis), = inscanvars
     if sharding is not None:
         raise ScanConversionError(
             "Sharding in broadcast_in_dim not yet supported."
         )
+    length = operand_aval.shape[inscan_axis]
     if length < shape[broadcast_dimensions[inscan_axis]]:
         raise ScanConversionError(
             "Global scan along broadcasting axis is not supported."
         )
-    shape = list(shape)
-    shape[broadcast_dimensions[inscan_axis]] = 1
-    shape = tuple(shape)
-
+    shape_list = list(shape)
+    shape_list[broadcast_dimensions[inscan_axis]] = 1
+    shape_for_body = tuple(shape_list)
     out_axis = broadcast_dimensions[inscan_axis]
-    out_prefill_shape = (
-        shape[:broadcast_dimensions[inscan_axis]] +
-        (operand.shape[inscan_axis],)
-        + shape[broadcast_dimensions[inscan_axis] + 1:]
-    )
-    out_prefill = lax.broadcast_in_dim_p.bind(
-        operand, shape=out_prefill_shape,
-        broadcast_dimensions=broadcast_dimensions, sharding=sharding,
-    )
+
+    def init_fn(operand):
+        out_prefill_shape = (
+            shape[:broadcast_dimensions[inscan_axis]] +
+            (operand.shape[inscan_axis],)
+            + shape[broadcast_dimensions[inscan_axis] + 1:]
+        )
+        out_prefill = lax.broadcast_in_dim_p.bind(
+            operand, shape=out_prefill_shape,
+            broadcast_dimensions=broadcast_dimensions, sharding=sharding,
+        )
+        return None, [out_prefill]
 
     def body_fn(carry, x):
         assert carry is None
         return None, jnp.squeeze(lax.broadcast_in_dim_p.bind(
-                jnp.expand_dims(x, inscan_axis), shape=shape,
+                jnp.expand_dims(x, inscan_axis), shape=shape_for_body,
                 broadcast_dimensions=broadcast_dimensions, sharding=sharding
             ), out_axis)
-    return None, body_fn, [(0, out_axis)], [out_prefill], []
+    return [(0, out_axis)], [], init_fn, body_fn
 register_rule(lax.broadcast_in_dim_p, broadcast_in_dim_rule)
 
 def _perm_inverse(p):
@@ -402,22 +388,24 @@ def _perm_inverse(p):
     s[p] = np.arange(len(p))
     return s
 
-def transpose_rule(inscanvars, length, prefill, permutation):
+def transpose_rule(inscanvars, in_aval, permutation):
     [argnum], [in_axis] = unzip2(inscanvars)
     assert argnum == 0
-    out_prefill = lax.transpose_p.bind(prefill, permutation=permutation)
     out_axis = _perm_inverse(permutation)[in_axis]
+
+    def init_fn(prefill):
+        return None, [lax.transpose_p.bind(prefill, permutation=permutation)]
+
     def body_fn(carry, x):
         return None, lax.squeeze(
             lax.transpose(
-                jnp.expand_dims(x, in_axis), permutation
-            ), [out_axis]
+                jnp.expand_dims(x, in_axis), permutation), [out_axis]
         )
-    return None, body_fn, [(0, out_axis)], [out_prefill], []
+    return [(0, out_axis)], [], init_fn, body_fn
 register_rule(lax.transpose_p, transpose_rule)
 
 def conv_general_dilated_rule(
-    inscanvars, length, lhs_prefill, rhs_prefill, window_strides, padding,
+    inscanvars, lhs_aval, rhs_aval, window_strides, padding,
     lhs_dilation, rhs_dilation, dimension_numbers, feature_group_count,
     batch_group_count, precision, preferred_element_type
 ):
@@ -435,15 +423,15 @@ def conv_general_dilated_rule(
                 "with batch_group_count > 1."
             )
         return batch_rule(
-            lax.conv_general_dilated_p, inscanvars, length, lhs_prefill,
-            rhs_prefill, window_strides=window_strides, padding=padding,
+            lax.conv_general_dilated_p, inscanvars, lhs_aval, rhs_aval,
+            window_strides=window_strides, padding=padding,
             lhs_dilation=lhs_dilation, rhs_dilation=rhs_dilation,
             dimension_numbers=dimension_numbers,
             feature_group_count=feature_group_count,
             batch_group_count=batch_group_count, precision=precision,
             preferred_element_type=preferred_element_type
         )
-    if lhs_prefill.ndim > 3:
+    if lhs_aval.ndim > 3:
         raise ScanConversionError(
             "Converting conv with spatial dimension > 1 not yet supported."
         )
@@ -457,7 +445,7 @@ def conv_general_dilated_rule(
     window_stride, = window_strides
     rhs_dilation, = rhs_dilation
     lhs_dilation, = lhs_dilation
-    window_size = rhs_prefill.shape[dimension_numbers.rhs_spec[2]]
+    window_size = rhs_aval.shape[dimension_numbers.rhs_spec[2]]
     if padding != ((rhs_dilation * (window_size - 1), lhs_dilation - 1),):
         raise ScanConversionError(
             "Only causal padding is supported in conv."
@@ -467,27 +455,31 @@ def conv_general_dilated_rule(
             "Strided convolution along scanned axis is not currently "
             "supported."
         )
-    out_prefill = lax.conv_general_dilated_p.bind(
-        lhs_prefill, rhs_prefill, window_strides=window_strides,
-        padding=padding, lhs_dilation=(lhs_dilation,),
-        rhs_dilation=(rhs_dilation,), dimension_numbers=dimension_numbers,
-        feature_group_count=feature_group_count,
-        batch_group_count=batch_group_count, precision=precision,
-        preferred_element_type=preferred_element_type,
-    )
-    prefill_len = lhs_prefill.shape[inscan_axis]
 
-    carry_len = rhs_dilation * (window_size - 1)
-    carry_zeros_shape = list(lhs_prefill.shape)
-    carry_zeros_shape[inscan_axis] = max(0, carry_len - prefill_len)
-    carry_init = jnp.concatenate([
-        jnp.zeros(carry_zeros_shape, lhs_prefill.dtype),
-        lax.slice_in_dim(
-            lhs_prefill, max(prefill_len - carry_len, 0), prefill_len,
-            axis=inscan_axis
+    def init_fn(lhs_prefill, rhs_prefill):
+        out_prefill = lax.conv_general_dilated_p.bind(
+            lhs_prefill, rhs_prefill, window_strides=window_strides,
+            padding=padding, lhs_dilation=(lhs_dilation,),
+            rhs_dilation=(rhs_dilation,), dimension_numbers=dimension_numbers,
+            feature_group_count=feature_group_count,
+            batch_group_count=batch_group_count, precision=precision,
+            preferred_element_type=preferred_element_type,
         )
-    ], inscan_axis
-    )
+        prefill_len = lhs_prefill.shape[inscan_axis]
+
+        carry_len = rhs_dilation * (window_size - 1)
+        carry_zeros_shape = list(lhs_prefill.shape)
+        carry_zeros_shape[inscan_axis] = max(0, carry_len - prefill_len)
+        carry_init = jnp.concatenate([
+            jnp.zeros(carry_zeros_shape, lhs_prefill.dtype),
+            lax.slice_in_dim(
+                lhs_prefill, max(prefill_len - carry_len, 0), prefill_len,
+                axis=inscan_axis
+            )
+        ], inscan_axis
+        )
+        return carry_init, [out_prefill]
+
     def body_fn(carry, x, rhs):
         lhs = lax.concatenate(
             [carry, jnp.expand_dims(x, inscan_axis)], inscan_axis
@@ -505,31 +497,20 @@ def conv_general_dilated_rule(
             lhs, 1, lhs.shape[inscan_axis], 1, inscan_axis
         )
         return carry_new, out
-    return (
-        carry_init, body_fn, [(0, outscan_axis)], [out_prefill], []
-    )
+    return [(0, outscan_axis)], [], init_fn, body_fn
 register_rule(lax.conv_general_dilated_p, conv_general_dilated_rule)
 
 def slice_rule(
-   inscanvars, length, operand, start_indices, limit_indices, strides
+   inscanvars, operand_aval, start_indices, limit_indices, strides
 ):
     (_, in_axis), = inscanvars
+    length = operand_aval.shape[in_axis]
     if start_indices[in_axis] != 0 or limit_indices[in_axis] != length:
         raise ScanConversionError("Slice along scanned axis is not supported")
     if strides is not None and strides[in_axis] > 1:
         raise ScanConversionError(
             "Strided slice along scan axis is not supported."
         )
-
-    prefill_limit_indices = list(limit_indices)
-    prefill_limit_indices[in_axis] = min(
-        limit_indices[in_axis], operand.shape[in_axis]
-    )
-    out_prefill = lax.slice_p.bind(
-        operand, start_indices=start_indices,
-        limit_indices=tuple(prefill_limit_indices),
-        strides=strides
-    )
 
     start_indices_ = list(start_indices)
     start_indices_.pop(in_axis)
@@ -541,17 +522,29 @@ def slice_rule(
     else:
         strides_ = None
 
+    def init_fn(operand):
+        prefill_limit_indices = list(limit_indices)
+        prefill_limit_indices[in_axis] = min(
+            limit_indices[in_axis], operand.shape[in_axis]
+        )
+        out_prefill = lax.slice_p.bind(
+            operand, start_indices=start_indices,
+            limit_indices=tuple(prefill_limit_indices),
+            strides=strides
+        )
+        return None, [out_prefill]
+
     def body_fn(carry, operand):
         assert carry is None
         return carry, lax.slice(
             operand, start_indices_, limit_indices_, strides_
         )
 
-    return None, body_fn, [(0, in_axis)], [out_prefill], []
+    return [(0, in_axis)], [], init_fn, body_fn
 register_rule(lax.slice_p, slice_rule)
 
 def pad_rule(
-    inscanvars, length, operand, padding_value, padding_config
+    inscanvars, operand_aval, padding_value_aval, padding_config
 ):
     assert len(inscanvars) == 1
     (argnum, axis), = inscanvars
@@ -562,21 +555,25 @@ def pad_rule(
         raise ScanConversionError(
             "Padding along scanned axis is not currently supported."
         )
-    prefill_padding_config = (
-        padding_config if operand.shape[axis] > 0 else
-        padding_config[:axis] + ((0, 0, 0),) + padding_config[axis + 1:]
-    )
-    out_prefill = lax.pad_p.bind(
-        operand, padding_value, padding_config=prefill_padding_config
-    )
     padding_config_ = list(padding_config)
     padding_config_.pop(axis)
+
+    def init_fn(operand, padding_value):
+        prefill_padding_config = (
+            padding_config if operand.shape[axis] > 0 else
+            padding_config[:axis] + ((0, 0, 0),) + padding_config[axis + 1:]
+        )
+        out_prefill = lax.pad_p.bind(
+            operand, padding_value, padding_config=prefill_padding_config
+        )
+        return 0, [out_prefill]
+
     def body_fn(i, operand, padding_value):
         return i + 1, lax.pad(operand, padding_value, padding_config_)
-    return 0, body_fn, [(0, axis)], [out_prefill], []
+    return [(0, axis)], [], init_fn, body_fn
 register_rule(lax.pad_p, pad_rule)
 
-def concatenate_rule(inscanvars, length, *operands, dimension):
+def concatenate_rule(inscanvars, *in_avals, dimension):
     argnums, axes = unzip2(inscanvars)
     if not all_equal(axes):
         raise ScanConversionError(
@@ -588,19 +585,23 @@ def concatenate_rule(inscanvars, length, *operands, dimension):
         raise ScanConversionError(
             "Global scan along concatenation dimension is not supported."
         )
-    if not all_equal(
-            o.shape[axis] for n, o in enumerate(operands) if n in argnums
-    ):
-        raise ScanConversionError(
-            "Different length prefills detected in concatenate."
+
+    def init_fn(*operands):
+        if not all_equal(
+                o.shape[axis] for n, o in enumerate(operands) if n in argnums
+        ):
+            raise ScanConversionError(
+                "Different length prefills detected in concatenate."
+            )
+        prefill_len = operands[argnums[0]].shape[axis]
+        out_prefill = lax.concatenate_p.bind(
+            *[o if n in argnums
+              else lax.slice_in_dim(o, 0, prefill_len, axis=axis)
+              for n, o in enumerate(operands)
+              ], dimension=dimension,
         )
-    prefill_len = operands[argnums[0]].shape[axis]
-    out_prefill = lax.concatenate_p.bind(
-        *[o if n in argnums else lax.slice_in_dim(o, 0, prefill_len, axis=axis)
-          for n, o in enumerate(operands)
-          ], dimension=dimension,
-    )
-    carry_init = prefill_len
+        return prefill_len, [out_prefill]
+
     def body_fn(i, *operands):
         operands = [
             jnp.expand_dims(
@@ -614,11 +615,11 @@ def concatenate_rule(inscanvars, length, *operands, dimension):
             lax.concatenate_p.bind(*operands, dimension=dimension), axis,
         )
         return i + 1, ans
-    return carry_init, body_fn, [(0, axis)], [out_prefill], []
+    return [(0, axis)], [], init_fn, body_fn
 register_rule(lax.concatenate_p, concatenate_rule)
 
 def dot_general_rule(
-    inscanvars, length, lhs_prefill, rhs_prefill, dimension_numbers, precision,
+    inscanvars, lhs_aval, rhs_aval, dimension_numbers, precision,
     preferred_element_type, out_sharding,
 ):
     ((lhs_contracting_axes, rhs_contracting_axes),
@@ -646,11 +647,16 @@ def dot_general_rule(
                 "dot_general is not supported."
             )
         out_axis = lhs_batch_axes.index(lhs_axis)
-        out_prefill = lax.dot_general_p.bind(
-            lhs_prefill, rhs_prefill, dimension_numbers=dimension_numbers,
-            precision=precision, preferred_element_type=preferred_element_type,
-            out_sharding=out_sharding
-        )
+
+        def init_fn(lhs_prefill, rhs_prefill):
+            out_prefill = lax.dot_general_p.bind(
+                lhs_prefill, rhs_prefill, dimension_numbers=dimension_numbers,
+                precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            )
+            return None, [out_prefill]
+
         def body_fn(carry, lhs, rhs):
             assert carry is None
             ans = jnp.squeeze(lax.dot_general_p.bind(
@@ -660,32 +666,42 @@ def dot_general_rule(
                 out_sharding=out_sharding,
             ), out_axis)
             return None, ans
-        return None, body_fn, [(0, out_axis)], [out_prefill], []
+        return [(0, out_axis)], [], init_fn, body_fn
     [argnum], [axis] = argnums, axes
     if argnum == 0:  # Option (2)
-        prefill_len = lhs_prefill.shape[axis]
         if axis in lhs_contracting_axes:
             raise ScanConversionError(
                 "Scanning over a contracting axis in dot_general is not "
                 "supported."
             )
-        lhs_axes = list(range(lhs_prefill.ndim))
+        lhs_axes = list(range(lhs_aval.ndim))
         for a in lhs_batch_axes + lhs_contracting_axes:
             lhs_axes.remove(a)
         out_axis = (
             lhs_batch_axes.index(axis) if axis in lhs_batch_axes else
             len(lhs_batch_axes) + lhs_axes.index(axis)
         )
-        if axis in lhs_batch_axes:
-            rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
-            rhs = lax.slice_in_dim(rhs_prefill, 0, prefill_len, axis=rhs_axis)
-        out_prefill = lax.dot_general_p.bind(
-            lhs_prefill, rhs, dimension_numbers=dimension_numbers,
-            precision=precision, preferred_element_type=preferred_element_type,
-            out_sharding=out_sharding,
-        )
+
+        def init_fn(lhs_prefill, rhs_prefill):
+            prefill_len = lhs_prefill.shape[axis]
+            if axis in lhs_batch_axes:
+                rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
+                rhs = lax.slice_in_dim(
+                    rhs_prefill, 0, prefill_len, axis=rhs_axis
+                )
+            else:
+                rhs = rhs_prefill
+            out_prefill = lax.dot_general_p.bind(
+                lhs_prefill, rhs, dimension_numbers=dimension_numbers,
+                precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            )
+            return prefill_len, [out_prefill]
+
         def body_fn(i, lhs, rhs):
             if axis in lhs_batch_axes:
+                rhs_axis = rhs_batch_axes[lhs_batch_axes.index(axis)]
                 rhs = lax.dynamic_index_in_dim(rhs, i, rhs_axis, keepdims=True)
             ans = jnp.squeeze(lax.dot_general_p.bind(
                 jnp.expand_dims(lhs, axis), rhs,
@@ -696,30 +712,39 @@ def dot_general_rule(
             return i + 1, ans
     else:  # Option (2)
         assert argnum == 1
-        prefill_len = rhs_prefill.shape[axis]
         if axis in rhs_contracting_axes:
             raise ScanConversionError(
                 "Scanning over a contracting axis in dot_general is not "
                 "supported."
             )
-        rhs_axes = list(range(rhs_prefill.ndim))
+        rhs_axes = list(range(rhs_aval.ndim))
         for a in rhs_batch_axes + rhs_contracting_axes:
             rhs_axes.remove(a)
         out_axis = (
             rhs_batch_axes.index(axis) if axis in rhs_batch_axes else
-            lhs.ndim - len(lhs_contracting_axes) + rhs_axes.index(axis)
+            lhs_aval.ndim - len(lhs_contracting_axes) + rhs_axes.index(axis)
         )
 
-        if axis in rhs_batch_axes:
-            lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
-            lhs = lax.slice_in_dim(lhs_prefill, 0, prefill_len, axis=lhs_axis)
-        out_prefill = lax.dot_general_p.bind(
-            lhs, rhs_prefill, dimension_numbers=dimension_numbers,
-            precision=precision, preferred_element_type=preferred_element_type,
-            out_sharding=out_sharding,
-        )
+        def init_fn(lhs_prefill, rhs_prefill):
+            prefill_len = rhs_prefill.shape[axis]
+            if axis in rhs_batch_axes:
+                lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
+                lhs = lax.slice_in_dim(
+                    lhs_prefill, 0, prefill_len, axis=lhs_axis
+                )
+            else:
+                lhs = lhs_prefill
+            out_prefill = lax.dot_general_p.bind(
+                lhs, rhs_prefill, dimension_numbers=dimension_numbers,
+                precision=precision,
+                preferred_element_type=preferred_element_type,
+                out_sharding=out_sharding,
+            )
+            return prefill_len, [out_prefill]
+
         def body_fn(i, lhs, rhs):
             if axis in rhs_batch_axes:
+                lhs_axis = lhs_batch_axes[rhs_batch_axes.index(axis)]
                 lhs = lax.dynamic_index_in_dim(
                     lhs, i, lhs_axis, keepdims=True
                 )
@@ -730,11 +755,11 @@ def dot_general_rule(
                 out_sharding=out_sharding,
             ), out_axis)
             return i + 1, ans
-    return prefill_len, body_fn, [(0, out_axis)], [out_prefill], []
+    return [(0, out_axis)], [], init_fn, body_fn
 register_rule(lax.dot_general_p, dot_general_rule)
 
 def reshape_rule(
-    inscanvars, length, operand, *dyn_shape, new_sizes, dimensions, sharding
+    inscanvars, operand_aval, *dyn_shape, new_sizes, dimensions, sharding
 ):
     if dyn_shape:
         raise ScanConversionError(
@@ -748,9 +773,10 @@ def reshape_rule(
             "reshape."
         )
     if dimensions is None:
-        dimensions = tuple(range(operand.ndim))
+        dimensions = tuple(range(operand_aval.ndim))
+    length = operand_aval.shape[axis]
     pre_size = np.prod(
-        np.take(operand.shape, dimensions)[:dimensions.index(axis)]
+        np.take(operand_aval.shape, dimensions)[:dimensions.index(axis)]
     )
     size = 1
     a = -1
@@ -759,76 +785,91 @@ def reshape_rule(
         size = size * new_sizes[a]
     if length != new_sizes[a]:
         raise ScanConversionError("Reshape must preserve scanned axis.")
-    out_prefill_sizes = list(new_sizes)
-    out_prefill_sizes[a] = operand.shape[axis]
-    out_prefill_sizes = tuple(out_prefill_sizes)
-    new_sizes = list(new_sizes)
-    new_sizes.pop(a)
-    new_sizes = tuple(new_sizes)
-    out_prefill = lax.reshape_p.bind(
-        operand, new_sizes=out_prefill_sizes, dimensions=dimensions,
-        sharding=sharding
-    )
-    dimensions = list(dimensions)
-    dimensions.remove(axis)
-    dimensions = [d - 1 if d > axis else d for d in dimensions]
-    dimensions = tuple(dimensions)
+
+    new_sizes_for_body = list(new_sizes)
+    new_sizes_for_body.pop(a)
+    new_sizes_for_body = tuple(new_sizes_for_body)
+    dimensions_for_body = list(dimensions)
+    dimensions_for_body.remove(axis)
+    dimensions_for_body = [
+        d - 1 if d > axis else d for d in dimensions_for_body
+    ]
+    dimensions_for_body = tuple(dimensions_for_body)
+
+    def init_fn(operand):
+        out_prefill_sizes = list(new_sizes)
+        out_prefill_sizes[a] = operand.shape[axis]
+        out_prefill_sizes = tuple(out_prefill_sizes)
+        out_prefill = lax.reshape_p.bind(
+            operand, new_sizes=out_prefill_sizes, dimensions=dimensions,
+            sharding=sharding
+        )
+        return None, [out_prefill]
+
     def body_fn(carry, x):
         assert carry is None
         return None, lax.reshape_p.bind(
-            x, new_sizes=new_sizes, dimensions=dimensions, sharding=sharding
+            x, new_sizes=new_sizes_for_body, dimensions=dimensions_for_body,
+            sharding=sharding
         )
-    return None, body_fn, [(0, a)], [out_prefill], []
+    return [(0, a)], [], init_fn, body_fn
 register_rule(lax.reshape_p, reshape_rule)
 
-def split_rule(inscanvars, length, operand, sizes, axis):
+def split_rule(inscanvars, operand_aval, sizes, axis):
     (_, scan_axis), = inscanvars
     if scan_axis == axis:
         raise ScanConversionError(
             "Applying split along scanned axis is not supported."
         )
-    out_prefills = lax.split_p.bind(operand, sizes=sizes, axis=axis)
     axis_ = axis if axis < scan_axis else axis - 1
+
+    def init_fn(operand):
+        out_prefills = lax.split_p.bind(operand, sizes=sizes, axis=axis)
+        return None, out_prefills
+
     def body_fn(carry, x):
         assert carry is None
         return None, lax.split(x, sizes, axis_)
-    outscanvars = [(n, scan_axis) for n in range(len(out_prefills))]
-    return None, body_fn, outscanvars, out_prefills, []
+    outscanvars = [(n, scan_axis) for n in range(len(sizes))]
+    return outscanvars, [], init_fn, body_fn
 register_rule(lax.split_p, split_rule)
 
-def squeeze_rule(inscanvars, length, array, dimensions):
+def squeeze_rule(inscanvars, array_aval, dimensions):
     (_, axis), = inscanvars
     if axis in dimensions:
         raise ScanConversionError("Cannot squeeze scanned axis.")
     return batch_rule(
-        lax.squeeze_p, inscanvars, length, array, dimensions=dimensions
+        lax.squeeze_p, inscanvars, array_aval, dimensions=dimensions
     )
 register_rule(lax.squeeze_p, squeeze_rule)
 
-def call_rule(inscanvars, jaxpr, *args):
-    body_fns, scanvars, carry_init, outscanvars, outvals = core.make_carry_init(
-        jaxpr, inscanvars, args
-    )
+def call_rule(inscanvars, jaxpr, *_):
+    scanvars, outscanvars = core.compute_scanvars(jaxpr, inscanvars)
+    def init_fn(*prefills):
+        carry_init, outvals = core.make_carry_init(
+            jaxpr, scanvars, prefills
+        )
+        return carry_init, outvals
     def body_fn(carry, *args):
-        return core.body_fn(jaxpr, body_fns, scanvars, carry, args)
-    return carry_init, body_fn, outscanvars, outvals, []
+        return core.body_fn(jaxpr, scanvars, carry, args)
+    return outscanvars, [], init_fn, body_fn
 
 def jit_rule(
-    inscanvars, length, *args, jaxpr, in_shardings, out_shardings, in_layouts,
+    inscanvars, *avals, jaxpr, in_shardings, out_shardings, in_layouts,
     out_layouts, donated_invars, ctx_mesh, name, keep_unused, inline,
     compiler_options_kvs,
 ):
     # TODO: Figure out how to handle (non-default cases of) all the params
-    return call_rule(inscanvars, jaxpr, *args)
+    return call_rule(inscanvars, jaxpr, *avals)
 register_rule(jit_p, jit_rule)
 
-def custom_vjp_call_rule(inscanvars, length, *args, call_jaxpr, **_):
+def custom_vjp_call_rule(inscanvars, *args, call_jaxpr, **_):
     # TODO: Maybe warn the user of undefined behavour if you take the gradient
     # of this?
     return call_rule(inscanvars, call_jaxpr, *args)
 register_rule(primitives.custom_vjp_call_p, custom_vjp_call_rule)
 
-def custom_jvp_call_rule(inscanvars, length, *args, call_jaxpr, **_):
+def custom_jvp_call_rule(inscanvars, *args, call_jaxpr, **_):
     # TODO: Maybe warn the user of undefined behavour if you take the gradient
     # of this?
     return call_rule(inscanvars, call_jaxpr, *args)
@@ -849,13 +890,14 @@ def remat_rule(
     return call_rule(inscanvars, closed_jaxpr, *args)
 register_rule(remat_p, remat_rule)
 
-def name_rule(inscanvars, length, arg, name):
-    return batch_rule(name_p, inscanvars, length, arg, name=name)
+def name_rule(inscanvars, arg_aval, name):
+    return batch_rule(name_p, inscanvars, arg_aval, name=name)
 register_rule(name_p, name_rule)
 
 def gather_rule(
-    inscanvars, length, operand, start_indices, dimension_numbers, slice_sizes,
-    indices_are_sorted=False, unique_indices=False, mode=None, fill_value=None
+    inscanvars, operand_aval, start_indices_aval, dimension_numbers,
+    slice_sizes, indices_are_sorted=False, unique_indices=False, mode=None,
+    fill_value=None
 ):
     if len(inscanvars) > 1:
         raise ScanConversionError(
@@ -865,20 +907,21 @@ def gather_rule(
     (argnum, axis), = inscanvars
 
     if argnum == 1:
-        if axis == start_indices.ndim - 1:
+        if axis == start_indices_aval.ndim - 1:
             raise ScanConversionError(
                 "Scanning over the index vector dim (the last axis of "
                 "start_indices) is not supported."
             )
         return batch_rule(
-            lax.gather_p, inscanvars, length, operand, start_indices,
+            lax.gather_p, inscanvars, operand_aval, start_indices_aval,
             dimension_numbers=dimension_numbers, slice_sizes=slice_sizes,
-            indices_are_sorted=indices_are_sorted, unique_indices=unique_indices,
-            mode=mode, fill_value=fill_value
+            indices_are_sorted=indices_are_sorted,
+            unique_indices=unique_indices, mode=mode, fill_value=fill_value
         )
 
     start_index_map = dimension_numbers.start_index_map
     operand_batching_dims = dimension_numbers.operand_batching_dims
+    length = operand_aval.shape[axis]
 
     if axis in start_index_map:
         # The scan axis is being dynamically indexed
@@ -897,21 +940,8 @@ def gather_rule(
         raise ScanConversionError(
             "gather must preserve scan axis size: got "
             f"slice_sizes[{axis}]={slice_sizes[axis]} "
-            f"but operand.shape[{axis}]={operand.shape[axis]}"
+            f"but operand.shape[{axis}]={length}"
         )
-
-    # Compute output prefill with adjusted slice_sizes
-    prefill_len = operand.shape[axis]
-    prefill_slice_sizes = list(slice_sizes)
-    prefill_slice_sizes[axis] = prefill_len
-
-    out_prefill = lax.gather_p.bind(
-        operand, start_indices,
-        dimension_numbers=dimension_numbers,
-        slice_sizes=tuple(prefill_slice_sizes),
-        indices_are_sorted=indices_are_sorted,
-        unique_indices=unique_indices, mode=mode, fill_value=fill_value
-    )
 
     # Calculate output scan axis
     collapsed_slice_dims = dimension_numbers.collapsed_slice_dims
@@ -923,11 +953,24 @@ def gather_rule(
         )
 
     non_collapsed_dims = [
-        d for d in range(operand.ndim) if d not in collapsed_slice_dims
+        d for d in range(operand_aval.ndim) if d not in collapsed_slice_dims
     ]
     out_axis = dimension_numbers.offset_dims[non_collapsed_dims.index(axis)]
 
-    carry_init = None
+    def init_fn(operand, start_indices):
+        # Compute output prefill with adjusted slice_sizes
+        prefill_len = operand.shape[axis]
+        prefill_slice_sizes = list(slice_sizes)
+        prefill_slice_sizes[axis] = prefill_len
+
+        out_prefill = lax.gather_p.bind(
+            operand, start_indices,
+            dimension_numbers=dimension_numbers,
+            slice_sizes=tuple(prefill_slice_sizes),
+            indices_are_sorted=indices_are_sorted,
+            unique_indices=unique_indices, mode=mode, fill_value=fill_value
+        )
+        return None, [out_prefill]
 
     def body_fn(carry, operand, start_indices_arg):
         assert carry is None
@@ -944,5 +987,5 @@ def gather_rule(
         )
         return None, lax.squeeze(ans, [out_axis])
 
-    return carry_init, body_fn, [(0, out_axis)], [out_prefill], []
+    return [(0, out_axis)], [], init_fn, body_fn
 register_rule(lax.gather_p, gather_rule)

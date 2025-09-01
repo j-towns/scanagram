@@ -1,12 +1,10 @@
-from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
 from jax.extend.core import (
     ClosedJaxpr, Jaxpr, Primitive, Var, Literal, JaxprEqn
 )
-from jax.core import Atom, AbstractValue
-from jax.tree_util import register_dataclass
+from jax.core import Atom
 import jax.numpy as jnp
 
 from scanagram.util import safe_map, unzip2, all_equal
@@ -67,11 +65,26 @@ def clean_up_dead_vars(eqn: JaxprEqn, env: dict[Var, Any],
             # equations.
             del env[v]
 ###############################################################################
-
-def body_fn(closed_jaxpr: ClosedJaxpr, body_fns, scanvars, carry, xs):
+def compute_scanvars(closed_jaxpr: ClosedJaxpr, inscanvars):
     jaxpr = closed_jaxpr.jaxpr
-    body_fns = list(reversed(body_fns))
-    carry_old = list(reversed(carry))
+    scanvars = {jaxpr.invars[n]: a for n, a in inscanvars}
+    for e in jaxpr.eqns:
+        eqn_inscanvars = [
+            (n, scanvars[v]) for n, v in enumerate(e.invars)
+            if type(v) is Var and v in scanvars
+        ]
+        if eqn_inscanvars:
+            outscanvars, _, _, _ = rules[e.primitive](
+                eqn_inscanvars, *[v.aval for v in e.invars], **e.params
+            )
+            scanvars.update((e.outvars[n], a) for n, a in outscanvars)
+    outscanvars = tuple(
+        (i, scanvars[v]) for i, v in enumerate(jaxpr.outvars) if v in scanvars
+    )
+    return scanvars, outscanvars
+
+def body_fn(closed_jaxpr: ClosedJaxpr, scanvars, carry, xs):
+    jaxpr = closed_jaxpr.jaxpr
     carry_new = []
 
     env = {}
@@ -85,16 +98,24 @@ def body_fn(closed_jaxpr: ClosedJaxpr, body_fns, scanvars, carry, xs):
     map(write, jaxpr.invars, xs)
     lu = last_used(jaxpr)
 
-    for e in jaxpr.eqns:
+    for carry_in, e in zip(carry, jaxpr.eqns):
         subfuns, bind_params = e.primitive.get_bind_params(e.params)
         invals = map(read, e.invars)
+        eqn_inscanvars = [
+            (n, scanvars[v]) for n, v in enumerate(e.invars)
+            if type(v) is Var and v in scanvars
+        ]
 
-        if any(type(v) is Var and v in scanvars for v in e.invars):
-            carry_in, eqn_body_fn = carry_old.pop(), body_fns.pop()
-            carry_out, ans = eqn_body_fn(carry_in, *invals)
+        if eqn_inscanvars:
+            in_avals = [v.aval for v in e.invars]
+            _, _, _, body_fn = rules[e.primitive](
+                eqn_inscanvars, *in_avals, **e.params
+            )
+            carry_out, ans = body_fn(carry_in, *invals)
             carry_new.append(carry_out)
         else:
             ans = e.primitive.bind(*subfuns, *invals, **bind_params)
+            carry_new.append(None)
 
         if e.primitive.multiple_results:
             map(write, e.outvars, ans)
@@ -124,10 +145,9 @@ def get_length(inscanvars, avals):
     assert all_equal(lengths)
     return lengths[0]
 
-def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars, args):
+def make_carry_init(closed_jaxpr: ClosedJaxpr, scanvars, args):
     jaxpr = closed_jaxpr.jaxpr
     carry_init = []
-    eqn_body_fns = []
 
     env = {}
 
@@ -147,29 +167,26 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars, args):
     map(write, jaxpr.constvars, closed_jaxpr.consts)
     map(write, jaxpr.invars, args)
 
-    length = get_length(inscanvars, closed_jaxpr.in_avals)
-
     # Map from Var to scan axis
-    scanvars = {jaxpr.invars[n]: a for n, a in inscanvars}
     for e in jaxpr.eqns:
-        inscanvars = [
+        eqn_inscanvars = [
             (n, scanvars[v]) for n, v in enumerate(e.invars)
             if type(v) is Var and v in scanvars
         ]
         in_vals = map(maybe_read, e.invars)
-        if inscanvars:
+        in_avals = [v.aval for v in e.invars]
+        if eqn_inscanvars:
             # TODO: Raise NotImplementedError if rule isn't defined
-            init, eqn_body_fn, outscanvars, outvals, to_delete = (
-                rules[e.primitive](inscanvars, length, *in_vals, **e.params)
+            outscanvars, to_delete, init_fn, _ = rules[e.primitive](
+                eqn_inscanvars, *in_avals, **e.params
             )
+            init, outvals = init_fn(*in_vals)
             for n, v in enumerate(outvals):
                 if n not in to_delete:
                     write(e.outvars[n], v)
-            scanvars.update((e.outvars[n], a) for n, a in outscanvars)
             for n, axis in outscanvars:
                 typecheck_prefill(outvals[n], axis, e.outvars[n].aval)
             carry_init.append(init)
-            eqn_body_fns.append(eqn_body_fn)
         else:
             subfuns, bind_params = e.primitive.get_bind_params(e.params)
             ans = e.primitive.bind(*subfuns, *in_vals, **bind_params)
@@ -177,25 +194,21 @@ def make_carry_init(closed_jaxpr: ClosedJaxpr, inscanvars, args):
                 map(write, e.outvars, ans)
             else:
                 write(e.outvars[0], ans)
+            carry_init.append(None)
 
-    outscanvars = tuple(
-        (i, scanvars[v]) for i, v in enumerate(jaxpr.outvars) if v in scanvars
-    )
     outvals = map(maybe_read, jaxpr.outvars)
-    return eqn_body_fns, set(scanvars), carry_init, outscanvars, outvals
+    return carry_init, outvals
 
 def make_scan(closed_jaxpr: ClosedJaxpr, prefills=None):
     if prefills is None:
         prefills = map(default_prefill, closed_jaxpr.in_avals)
     inscanvars = [(n, 0) for n in range(len(closed_jaxpr.in_avals))]
-    eqn_body_fns, scanvars, carry_init, outscanvars, outvals = make_carry_init(
-        closed_jaxpr, inscanvars, prefills
+    scanvars, outscanvars = compute_scanvars(closed_jaxpr, inscanvars)
+    carry_init, outvals = make_carry_init(
+        closed_jaxpr, scanvars, prefills
     )
     check_outvars(outscanvars, len(closed_jaxpr.out_avals))
-    return (
-        partial(body_fn, closed_jaxpr, eqn_body_fns, scanvars), carry_init,
-        outvals
-    )
+    return partial(body_fn, closed_jaxpr, scanvars), carry_init, outvals
 
 class ScanConversionError(Exception):
     pass
